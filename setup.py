@@ -1,0 +1,82 @@
+#!/usr/bin/env python
+"""Distutils setup file"""
+
+#import ez_setup
+#ez_setup.use_setuptools()
+from setuptools import setup
+
+# Metadata
+PACKAGE_NAME = "Trellis"
+PACKAGE_VERSION = "0.0.1"
+PACKAGES = ['peak', 'peak.events']
+MODULES = []
+
+import sys
+if sys.version[:3]<"2.4":
+    MODULES.append('_threading_local')
+
+def get_description():
+    # Get our long description from the documentation
+    f = file('README.txt')
+    lines = []
+    for line in f:
+        if not line.strip():
+            break     # skip to first blank line
+    for line in f:
+        if line.startswith('.. contents::'):
+            break     # read to table of contents
+        lines.append(line)
+    f.close()
+    return ''.join(lines)
+
+
+
+
+
+
+
+
+
+
+
+setup(
+    name=PACKAGE_NAME,
+    version=PACKAGE_VERSION,
+    url = "http://peak.telecommunity.com/DevCenter/Trellis",
+    description='A simple "untwisted" approach to event-driven programming',
+    long_description = get_description(),
+    author="Phillip J. Eby",
+    author_email="peak@eby-sarna.com",
+    license="PSF or ZPL",
+    test_suite = 'test_trellis',
+    packages = PACKAGES,
+    namespace_packages = PACKAGES,
+    py_modules = MODULES,
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
