@@ -88,6 +88,106 @@ on any other ``Value`` or ``Input`` for their calculation.
 Internals and Tests
 -------------------
 
+Update State
+============
+
+The ``Trellis`` class manages the logic of updating::
+
+    >>> from peak.events.trellis import Trellis
+    >>> t = Trellis()
+
+The principal job of a ``Trellis`` is to co-ordinate value changes by deferring
+recursive updates and recalculations until any in-progress updates or
+recalculations have been completed.
+
+The process of propagating changes across a trellis's value holders is called a
+"pulse".  Each pulse is numbered sequentially, beginning with zero::
+
+    >>> t.pulse
+    0
+
+A pulse occurs during a change notification
+Change propagation within a trellis can only happen during a pulse, but changes
+to data or system state that is *outside* a trellis can only be processed
+between pulses.
+the tr
+
+This process entails two phases when the last recursive update is completed:
+
+1. Deferred recalculations are processed to complete all change propagation
+2. Observers and deferred updates are invoked in a new update cycle.
+
+Changes are handled using the ``call_between_pulses()`` method, which takes a
+callback function and any number of positional arguments.  If a pulse is not
+in progress, the callback is invoked immediately with the supplied arguments::
+
+    >>> def hello(*args): print args
+    >>> def what_version(): print "version =", t.pulse
+
+    >>> t.call_between_pulses(hello, "Hello, world!")
+    ('Hello, world!',)
+
+    >>> t.call_between_pulses(what_version)
+    version = 0
+
+The ``with_propagation()`` method takes a callback and any number of positional
+arguments.  The callback is run in an "update" context, meaning that there is
+a new version number::
+
+    >>> t.with_propagation(what_version)
+    version = 1
+
+Unless the call to ``with_propagation()`` is already inside a call to
+``with_propagation()``::
+
+    >>> t.with_propagation(t.with_propagation, what_version)
+    version = 2
+
+If a ``call_between_pulses()`` call occurs during a pulse, its execution is
+deferred until all outstanding updates are finished, at which point all the
+callbacks are run in the order they were given, in a *new* managed update::
+
+    >>> def do_it():
+    ...     what_version()
+    ...     t.call_between_pulses(what_version)
+    ...     t.call_between_pulses(hello, "Hello, world!")
+    ...     t.call_between_pulses(hello, "Goodbye", "World!")
+    ...     print "finished do_it"
+
+    >>> t.with_propagation(do_it)
+    version = 3
+    finished do_it
+    version = 4
+    ('Hello, world!',)
+    ('Goodbye', 'World!')
+
+And of course this deferred callback queue is cleared between runs::
+
+    >>> t.with_propagation(lambda: None)
+    >>> what_version()
+    version = 5
+
+``call_between_pulses()`` callbacks can also be registered while callbacks are taking
+place, and they will all be called in another version::
+
+    >>> def do_it():
+    ...     what_version()
+    ...     t.call_between_pulses(what_version)
+    ...     t.call_between_pulses(t.call_between_pulses, what_version)
+    ...     t.call_between_pulses(t.call_between_pulses, what_version)
+    ...     print "finished do_it"
+    >>> t.with_propagation(do_it)
+    version = 6
+    finished do_it
+    version = 7
+    version = 8
+    version = 8
+
+Essentially, this means that ``with_propagation()`` recurses until no new
+``call_between_pulses()`` callbacks are registered.  That is, ``with_propagation()``
+tries to return the system to a stable state by repeatedly firing callbacks
+until there is nothing that still needs calling back.
+
 
 Data Pulse Axioms
 =================
@@ -103,7 +203,7 @@ be::
     >>> v = Input(42)
     >>> def rule(): print "computing"; return v.value
     >>> c = Value(rule)
-    >>> c.as_of
+    >>> c.pulse
     -1
 
 2. Global Update Counter: There is a global update counter that is incremented
@@ -112,33 +212,28 @@ globally-consistent notion of the "time" at which updates occur::
 
     >>> from peak.events.trellis import state
 
-    >>> start = state.version
-    >>> state.version - start
+    >>> start = state.pulse
+    >>> state.pulse - start
     0
 
 3. Inputs Move The System Forward: When an ``Input`` changes, it increments
 the global update count and stores the new value in its own update count::
 
     >>> i = Input(22)
-    >>> state.version - start
+    >>> state.pulse - start
     1
 
-    >>> i.as_of - start
+    >>> i.pulse - start
     1
 
     >>> i.value = 21
-    >>> i.as_of - start
+    >>> i.pulse - start
     2
-    >>> state.version - start
+    >>> state.pulse - start
     2
 
-4. Out-of-dateness: A value is out of date if its update count is lower than
-the update count of any of the values it depends on::
-
-    >>> c.needs
-    0
-    >>> c.as_of < c.needs
-    True
+4. XXX Out-of-dateness: A value is out of date if its update count is lower than
+the update count of any of the values it depends on.
 
 5. Out-of-date Before: When a ``Value`` object's ``.value`` is queried, its
 rule is only run if the value is out of date; otherwise a cached previous value
@@ -154,7 +249,7 @@ is set, if it is an ``Input``), its update count must be equal to the global
 update count.  This guarantees that a rule will not run more than once per
 update::
 
-    >>> c.as_of == state.version
+    >>> c.pulse == state.pulse
     True
 
     >>> c.value
@@ -171,7 +266,8 @@ notify them at most once if there is a change.
    contains the ``Value`` whose rule is currently being evaluated in the
    corresponding thread.  This variable can be empty (e.g. None)::
 
-    >>> print state.computing
+    >>> from peak.events.trellis import current_observer
+    >>> print current_observer()
     None
 
 2. "Currentness" Maintenance: While a ``Value`` object's rule is being run, the
@@ -181,26 +277,26 @@ notify them at most once if there is a change.
    be able to tell who is using them::
 
     >>> def rule():
-    ...     print "computing", state.computing
+    ...     print "computing", current_observer()
     >>> v = Value(rule)
 
-    >>> print state.computing   # between calculations
+    >>> print current_observer()   # between calculations
     None
 
     >>> v.value                 # during calculations
     computing <peak.events.trellis.Value object at ...>
 
-    >>> print state.computing   # returns to None
+    >>> print current_observer()   # returns to None
     None
 
     >>> def rule1():
-    ...     print "computing r1?", state.computing is r1
+    ...     print "computing r1?", current_observer() is r1
     ...     v = r2.value
     ...     print "r2 value =", v
-    ...     print "computing r1?", state.computing is r1
+    ...     print "computing r1?", current_observer() is r1
 
     >>> def rule2():
-    ...     print "computing r2?", state.computing is r2
+    ...     print "computing r2?", current_observer() is r2
     ...     return 42
 
     >>> r1, r2 = Value(rule1), Value(rule2)
@@ -255,13 +351,13 @@ notify them at most once if there is a change.
     True
 
     >>> def showme():
-    ...     r1.value    # r3 will be a listener of r2 now
+    ...     r1.value    # r3 will be a listener of r1 now
     ...     if r1.listeners()==[r3]:
     ...         print "listeners of r1==[r3]"
     ...     elif r3 in r1.listeners():
     ...         print "subscribed"
-    ...     if r1.as_of == i1.as_of: print "r1 is up-to-date"
-    ...     if r2.as_of == i1.as_of: print "r2 is up-to-date"
+    ...     if r1.pulse >= state.pulse: print "r1 is up-to-date"
+    ...     if r2.pulse >= state.pulse: print "r2 is up-to-date"
 
     >>> r3 = Value(showme)
     >>> r3.value
@@ -303,6 +399,13 @@ notify them at most once if there is a change.
    the listeners have first been notified of the change.  (This guarantees
    that inconsistent views cannot occur.)
 
+7a. Deferred Recalculation: The recalculation of listeners (not the
+    notification of the listeners' out-of-dateness) must be deferred if a rule
+    is currently being evaluated.  When the last rule being evaluated is
+    finished, all deferred recalculations must occur.  This guarantees that in
+    the absence of circular dependencies, no cell can ask for a value that's in
+    the process of being calculated.)
+
 8. One-Time Notification Only: A value's listeners are removed from its
    listener collection as soon as they have been notified.  In particular, the
    value's collection of listeners must be cleared *before* *any* of the
@@ -340,9 +443,9 @@ Update Algorithm
 A value must be computed if and only if it is out of date; otherwise, it should
 just return its previous cached value.  A value is out of date if a
 value it depends on has changed since the value was last calculated.  The
-``as_of`` attribute tracks the version the value was last calculated "as of",
+``pulse`` attribute tracks the version the value was last calculated "as of",
 and the ``needs`` attribute records the latest version of any value this value
-depends on.  If ``needs>=as_of``, the value is out of date::
+depends on.  If ``needs>=pulse``, the value is out of date::
 
     >>> x = Input(23)
     >>> def rule():
@@ -440,7 +543,9 @@ TODO
 
 * Circular dependency checking
 
-* Deferred updates or errors during propagation
-
 * Observers
+
+* Values should belong to a specific trellis, rather than a single global one
+
+* Rollback
 

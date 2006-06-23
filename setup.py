@@ -9,11 +9,6 @@ from setuptools import setup
 PACKAGE_NAME = "Trellis"
 PACKAGE_VERSION = "0.0.1"
 PACKAGES = ['peak', 'peak.events']
-MODULES = []
-
-import sys
-if sys.version[:3]<"2.4":
-    MODULES.append('_threading_local')
 
 def get_description():
     # Get our long description from the documentation
@@ -29,16 +24,6 @@ def get_description():
     f.close()
     return ''.join(lines)
 
-
-
-
-
-
-
-
-
-
-
 setup(
     name=PACKAGE_NAME,
     version=PACKAGE_VERSION,
@@ -51,32 +36,5 @@ setup(
     test_suite = 'test_trellis',
     packages = PACKAGES,
     namespace_packages = PACKAGES,
-    py_modules = MODULES,
 )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
