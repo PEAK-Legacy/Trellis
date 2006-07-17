@@ -123,7 +123,6 @@ class ValueHolder(object):
 
 class Value(ValueHolder):
     """Holder for a value that can change"""
-
     __slots__ = 'rule'
 
     def __init__(self, rule):
@@ -131,11 +130,11 @@ class Value(ValueHolder):
         self.rule = rule
 
     def is_dirty(self):
-        if not hasattr(self,'_cache'):
+        if self.pulse == state.pulse:   return False
+        elif self in state.dirty:       return True
+        elif not hasattr(self,'_cache'):
             self._cache = with_observer(self, self.rule)
             return False
-        elif self in state.dirty:
-            return True
         else:
             for dep in self.notifier.backlinks:
                 if dep.is_dirty():
@@ -161,6 +160,7 @@ class Value(ValueHolder):
     def become_constant(self):
         del self._notifiers, self.rule, self.notifier
         self.__class__ = Constant
+
 
 class Input(ValueHolder):
     """A mutable value intended for inputs from non-trellis components"""
