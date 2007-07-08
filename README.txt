@@ -40,24 +40,25 @@ also takes some of its terminology from the Smalltalk "Value Model" frameworks.
 Programmer API
 --------------
 
-Value Objects
+
+Cell Objects
 =============
 
-``Value`` objects are the basis of the framework.  Each holds a value upon
-which other values may depend.  There are three basic value types, ``Value``,
-``Input``, and ``Constant``::
+``Cell`` objects are the basis of the framework.  Each holds a value upon
+which other values may depend.  There are two basic value types, ``Cell`` and
+``Constant``::
 
     >>> from peak.events.trellis import Cell, Constant
     
-``Input`` objects simply hold a value::
+``Cell`` objects can hold a value::
 
     >>> v = Cell(value=42)
     >>> v.value
     42
 
-but ``Value`` objects use a *rule* to determine their value::
+or use a *rule* to determine their value::
 
-    >>> v_times_two = Cell(lambda: v.value * 2)
+    >>> v_times_two = Cell(rule=lambda: v.value * 2)
     >>> v_times_two.value
     84
 
@@ -80,10 +81,145 @@ thereafter::
     AttributeError: Constants can't be changed
 
 Most of the time you won't use ``Constant`` objects directly, though, because
-``Value`` objects automatically become ``Constant`` when they no longer depend
-on any other ``Value`` or ``Input`` for their calculation.
+if a ``Cell`` has a rule but no initial value, it becomes a ``ReadOnlyCell``,
+and if at some point it no longer depends on any other cell, it becomes
+a ``Constant`` automatically after the next time it's read::
+
+    >>> def rule():
+    ...     print "computing"
+    ...     return 1
+    
+    >>> c = Cell(rule)
+    >>> c   # repr() uses .value, which reads the cell, causing rule to run...
+    computing
+    ReadOnlyCell(<function rule...>, 1)
+
+    >>> c   # The rule didn't use any other cells, so we need never recalculate
+    Constant(1)
 
 
+Demos
+-----
+
+Circular calculations::
+
+    >>> F = Cell(lambda: C.value*1.8 + 32, 32)
+    >>> C = Cell(lambda: (F.value-32)/1.8, 0)
+    >>> F.value
+    32
+    >>> C.value
+    0
+    >>> F.value = 212
+    >>> C.value
+    100.0
+    >>> C.value = 0
+    >>> F.value
+    32.0
+    >>> C.value = -40
+    >>> F.value
+    -40.0
+
+
+Spreadsheet simulation (XXX this doesn't work in Python 2.3, which )::
+
+    >>> from UserDict import DictMixin, UserDict
+    >>> class Spreadsheet(DictMixin, UserDict):
+    ...     def __init__(self, *args, **kw):
+    ...         self.data = {}
+    ...         for arg in args+(kw,): self.update(arg)
+    ...
+    ...     def __getitem__(self, key):
+    ...         return self.data[key].value
+    ...
+    ...     def __setitem__(self, key, value):
+    ...         def rule():
+    ...             print "computing", value
+    ...             return eval(value, globals(), self)
+    ...         if key in self.data:
+    ...             self.data[key].rule = rule
+    ...         else:
+    ...             self.data[key] = Cell(rule, None)
+
+    >>> ss = Spreadsheet()
+    >>> ss['a1'] ='5'
+    >>> ss['a2']='2*a1'
+    >>> ss['a3']='2*a2'
+    
+    >>> ss['a1']
+    computing 5
+    5
+    >>> ss['a2']
+    computing 2*a1
+    10
+
+    >>> ss['a1'] = '7'
+    computing 7
+    computing 2*a1
+
+    >>> ss['a1']
+    7
+    >>> ss['a2']
+    14
+    >>> ss['a3']
+    computing 2*a2
+    28
+
+    >>> ss['a1'] = '3'
+    computing 3
+    computing 2*a1
+    computing 2*a2
+
+Events::
+
+    >>> def last_ping():
+    ...     if ping.value is not None:
+    ...         print "ping", ping.value
+    ...         return ping.value
+
+    >>> last_ping = Cell(last_ping)
+    >>> ping = Cell(event=True)
+
+    >>> last_ping
+    ReadOnlyCell(<function last_ping...>, None)
+
+    >>> ping.value = 1
+    ping 1
+    >>> last_ping.value
+    1
+
+    >>> F.value = 27
+    >>> print ping.value    # event goes away as soon as something changes
+    None
+    >>> last_ping.value     # not an event, so value hangs around
+    1
+
+    >>> ping.value = 2     
+    ping 2
+    >>> last_ping.value
+    2
+    >>> ping.value = 2      # deps are recalculated even if value is same
+    ping 2
+
+    >>> F.value = 99
+    >>> print ping.value
+    None
+    >>> last_ping.value
+    2
+
+    >>> read_only_event = Cell(lambda: 1, event=True)
+    >>> read_only_event
+    ReadOnlyCell(...<lambda>..., 1, event[None])
+
+    >>> ping.value = 53
+    ping 53
+    
+    >>> read_only_event     # something changed, so value goes back to None...
+    ReadOnlyCell(...<lambda>..., None, event[None])
+
+    >>> read_only_event     # it didn't depend on anything, so it goes constant
+    Constant(None)
+
+    
 -------------------
 Internals and Tests
 -------------------
@@ -177,13 +313,14 @@ notify them at most once if there is a change.
 
     >>> def rule():
     ...     print "computing", current_observer()
+
     >>> v = Cell(rule)
 
     >>> print current_observer()   # between calculations
     None
 
     >>> v.value                 # during calculations
-    computing <...Cell object at ...>
+    computing ReadOnlyCell(<function rule...>, None)
 
     >>> print current_observer()   # returns to None
     None
@@ -273,8 +410,12 @@ notify them at most once if there is a change.
     listeners of r1==[r3]
     r1 is up-to-date
 
-    >>> type(r2)        # because it's now a constant
-    <class 'peak.events.trellis.Constant'>
+    >>> r2
+    ReadOnlyCell(<function <lambda>...>, [1])
+
+    >>> r2        # and now it's constant
+    Constant([1])
+
 
 5. Dependency Minimalism: A listener should only be added if it is not already
    present in the value's listener collection.  This isn't strictly

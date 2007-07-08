@@ -1,10 +1,16 @@
 from peak.context import Service, get_ident, InputConflict
-from peak.util.symbols import NOT_GIVEN
+from peak.util.symbols import Symbol
 from weakref import ref
 
-_states = {}
-_sentinel = NOT_GIVEN   # XXX should get our own symbol for this
+__all__ = [
+    'Cell', 'Constant', 'EventLoop',
+]
 
+_states = {}
+
+NO_VALUE = Symbol('NO_VALUE', __name__)
+
+_sentinel = NO_VALUE
 
 def current_pulse():
     return _states.setdefault(get_ident(), [1, None])[0]
@@ -33,13 +39,15 @@ def current_observer():
 
 
 
+class ReadOnlyCell(object):
 
+    __slots__ = """
+        _state _listeners _depends _current_val _rule _reset _changed_as_of
+        _version __weakref__
+    """.split()
 
-
-
-
-
-class Cell(object):
+    _writebuf = _sentinel
+    _can_freeze = True
 
     def __init__(self, rule=None, value=None, event=False):
         tid = get_ident()
@@ -51,13 +59,15 @@ class Cell(object):
         self._current_val = value
         self._rule = rule
         self._reset = (_sentinel, value)[bool(event)]
-        self._writebuf = _sentinel
 
     def _get_value(self):
         pulse, observer = self._state
         if pulse is not self._version:
             self.check_dirty(pulse)
 
+            if not self._depends and self._can_freeze and (self._reset
+                is _sentinel or self._changed_as_of is not pulse
+            ):  return self.freeze()
         if observer is not None and observer is not self:
             depends = observer._depends
             listeners = self._listeners
@@ -67,18 +77,8 @@ class Cell(object):
 
         return self._current_val
 
-    def _set_value(self, value):
-        pulse, observer = self._state
-        if pulse is not self._version:
-            self.check_dirty(pulse)
-        old = self._writebuf
-        if old is not _sentinel and old is not value and old!=value:
-            raise InputConflict(old, value) # XXX
-        self._writebuf = value
-        EventLoop.do_once(self._advance, pulse+1) # schedule propagation
-
-    value = property(_get_value, _set_value)
-    del _get_value, _set_value
+    value = property(_get_value)
+    del _get_value
 
     def check_dirty(self, pulse):
         if pulse is self._version:
@@ -114,7 +114,7 @@ class Cell(object):
             self._changed_as_of = pulse
             do = EventLoop.do_once
             listeners, self._listeners = self._listeners, []
-            # XXX become constant here if needed + possible
+
             for c in listeners:
                 c = c()
                 if c is not None and c._version is not pulse:
@@ -136,24 +136,106 @@ class Cell(object):
         finally:
             self._state[1] = old_observer
 
-        
-class Constant(Cell):
+    def _set_rule(self, rule):
+        pulse, observer = self._state
+        if pulse is not self._version:
+            self.check_dirty(pulse)
+        self._rule = rule
+        self._depends = None
+        EventLoop.do_once(self._advance, pulse+1) # schedule propagation
+
+    rule = property(lambda s:s._rule, _set_rule)
+    del _set_rule
+
+    def freeze(self):
+        pulse, observer = self._state
+        if pulse is not self._version:
+            self.check_dirty(pulse)
+        del self._depends, self._listeners
+        self.__class__ = Constant
+        return self._current_val
+
+    def __repr__(self):
+        e = ('', ', event[%r]'% self._reset)[self._reset is not _sentinel]
+        return "%s(%r, %r%s)" %(self.__class__.__name__,self.rule,self.value,e)
+
+
+
+
+class Cell(ReadOnlyCell):
+
+    _can_freeze = False
+    __slots__ = '_writebuf'
+
+    def __new__(cls, rule=None, value=_sentinel, event=False):
+        if value is _sentinel and rule is not None:
+            return ReadOnlyCell(rule, None, event)
+        return ReadOnlyCell.__new__(cls, rule, value, event)
+
+    def __init__(self, rule=None, value=None, event=False):
+        ReadOnlyCell.__init__(self, rule, value, event)
+        self._writebuf = _sentinel
+
+    def _set_value(self, value):
+        pulse, observer = self._state
+        if pulse is not self._version:
+            self.check_dirty(pulse)
+        old = self._writebuf
+        if old is not _sentinel and old is not value and old!=value:
+            raise InputConflict(old, value) # XXX
+        self._writebuf = value
+        EventLoop.do_once(self._advance, pulse+1) # schedule propagation
+
+    value = property(ReadOnlyCell.value.fget, _set_value)
+    del _set_value
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class Constant(ReadOnlyCell):
     """An immutable cell that no longer depends on anything else"""
 
-    #__slots__ = ()
-    #_notifiers = ()
-    value = None    # Cell._current_val
+    __slots__ = ()
+    value = ReadOnlyCell._current_val
 
     def __init__(self, value):
-        self.value = value  # Cell._current_val.__set__(self, value)
+        ReadOnlyCell._current_val.__set__(self, value)
 
     def __setattr__(self, name, value):
-        if 'value' in self.__dict__: # XXX hasattr(self,'_cache'):
-            raise AttributeError("Constants can't be changed")
-        object.__setattr__(self, name, value)
+        raise AttributeError("Constants can't be changed")
 
     def check_dirty(self, pulse):
         return False
+
+    def __repr__(self):
+        return "Constant(%r)" % (self.value,)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
