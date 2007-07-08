@@ -572,20 +572,71 @@ a new dependency was set up.
     >>> A.value = 1
 
 
+The infamous "Pentagram of Death" problem is described as follows:
+
+"""If X is an input cell, and A and B and H depend on it, and C depends on B, 
+and A depends on C, and H depends on A and C, then most algorithms will 
+fail to handle a situation where H is recalculated before C knows it's out 
+of date."""
+
+Let's try it.  Note that the order of values in the lambda expressions is
+intended to force the dependencies to be resolved in an order that ensures H
+gets told that X has changed before C does, and that C has to find out whether
+B has changed before it is allowed to be recalculated::
+
+    >>> def recalc(name):
+    ...     print "calculating", name
+
+    >>> X = Cell(value=1)
+    >>> A = Cell(lambda: recalc("A") or (X.value, C.value))
+    >>> B = Cell(lambda: recalc("B") or  X.value)
+    >>> C = Cell(lambda: recalc("C") or (B.value, X.value))
+    >>> H = Cell(lambda: recalc("H") or (X.value, C.value))
+
+We'll calculate H first, so it will be X's first listener::
+
+    >>> H.value
+    calculating H
+    calculating C
+    calculating B
+    (1, (1, 1))
+
+And then A, so it'll be the last listener::
+
+    >>> A.value
+    calculating A
+    (1, (1, 1))
+
+Now, if we change X, everyone should update in the correct order::
+
+    >>> X.value = 2
+    calculating H
+    calculating B
+    calculating C
+    calculating A
+
+    >>> H.value
+    (2, (2, 2))
+
+If this had been a shoddy algorithm, then ``H.value`` would have been
+``(2, (1, 1))`` instead, and the update order might have been different.  Note
+by the way that B is calculated before C, because C depends on B as its first
+dependency.  So it has to look "up" the dependency graph to see if B or X have
+changed before C's rule can be run.  Since B is first in C's dependency order,
+it gets recalculated first.  Had X been first in C's dependency order instead,
+the displayed calculation order would have been H, C, B, A.
+
+(Similarly, H gets recalculated before C, because its first dependency is X,
+so it immediately realizes it needs to recalculate.  X also notifies H first
+that a recalculation might be necessary.)
+
+
 TODO
 ====
 
 * Allow custom comparison function for "changedness"
 
 * Allow rules to see their value owner, previous value, ???
-
-* Value attributes
-
-* Circular dependency checking
-
-* Observers
-
-* Values should belong to a specific trellis, rather than a single global one
 
 * Rollback
 
