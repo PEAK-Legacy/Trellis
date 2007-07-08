@@ -36,5 +36,6 @@ setup(
     test_suite = 'test_trellis',
     packages = PACKAGES,
     namespace_packages = PACKAGES,
+    install_requires = ['Contextual>=0.7.dev-r2334', 'SymbolType>=1.0'],
 )
 

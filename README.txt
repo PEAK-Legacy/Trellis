@@ -47,17 +47,17 @@ Value Objects
 which other values may depend.  There are three basic value types, ``Value``,
 ``Input``, and ``Constant``::
 
-    >>> from peak.events.trellis import Value, Input, Constant
-
+    >>> from peak.events.trellis import Cell, Constant
+    
 ``Input`` objects simply hold a value::
 
-    >>> v = Input(42)
+    >>> v = Cell(value=42)
     >>> v.value
     42
 
 but ``Value`` objects use a *rule* to determine their value::
 
-    >>> v_times_two = Value(lambda: v.value * 2)
+    >>> v_times_two = Cell(lambda: v.value * 2)
     >>> v_times_two.value
     84
 
@@ -88,107 +88,6 @@ on any other ``Value`` or ``Input`` for their calculation.
 Internals and Tests
 -------------------
 
-Update State
-============
-
-The ``Trellis`` class manages the logic of updating::
-
-    >>> from peak.events.trellis import Trellis
-    >>> t = Trellis()
-
-The principal job of a ``Trellis`` is to co-ordinate value changes by deferring
-recursive updates and recalculations until any in-progress updates or
-recalculations have been completed.
-
-The process of propagating changes across a trellis's value holders is called a
-"pulse".  Each pulse is numbered sequentially, beginning with zero::
-
-    >>> t.pulse
-    0
-
-A pulse occurs during a change notification
-Change propagation within a trellis can only happen during a pulse, but changes
-to data or system state that is *outside* a trellis can only be processed
-between pulses.
-the tr
-
-This process entails two phases when the last recursive update is completed:
-
-1. Deferred recalculations are processed to complete all change propagation
-2. Observers and deferred updates are invoked in a new update cycle.
-
-Changes are handled using the ``call_between_pulses()`` method, which takes a
-callback function and any number of positional arguments.  If a pulse is not
-in progress, the callback is invoked immediately with the supplied arguments::
-
-    >>> def hello(*args): print args
-    >>> def what_version(): print "version =", t.pulse
-
-    >>> t.call_between_pulses(hello, "Hello, world!")
-    ('Hello, world!',)
-
-    >>> t.call_between_pulses(what_version)
-    version = 0
-
-The ``with_propagation()`` method takes a callback and any number of positional
-arguments.  The callback is run in an "update" context, meaning that there is
-a new version number::
-
-    >>> t.with_propagation(what_version)
-    version = 1
-
-Unless the call to ``with_propagation()`` is already inside a call to
-``with_propagation()``::
-
-    >>> t.with_propagation(t.with_propagation, what_version)
-    version = 2
-
-If a ``call_between_pulses()`` call occurs during a pulse, its execution is
-deferred until all outstanding updates are finished, at which point all the
-callbacks are run in the order they were given, in a *new* managed update::
-
-    >>> def do_it():
-    ...     what_version()
-    ...     t.call_between_pulses(what_version)
-    ...     t.call_between_pulses(hello, "Hello, world!")
-    ...     t.call_between_pulses(hello, "Goodbye", "World!")
-    ...     print "finished do_it"
-
-    >>> t.with_propagation(do_it)
-    version = 3
-    finished do_it
-    version = 4
-    ('Hello, world!',)
-    ('Goodbye', 'World!')
-
-And of course this deferred callback queue is cleared between runs::
-
-    >>> t.with_propagation(lambda: None)
-    >>> what_version()
-    version = 5
-
-``call_between_pulses()`` callbacks can also be registered while callbacks are taking
-place, and they will all be called in another version::
-
-    >>> def do_it():
-    ...     what_version()
-    ...     t.call_between_pulses(what_version)
-    ...     t.call_between_pulses(t.call_between_pulses, what_version)
-    ...     t.call_between_pulses(t.call_between_pulses, what_version)
-    ...     print "finished do_it"
-    >>> t.with_propagation(do_it)
-    version = 6
-    finished do_it
-    version = 7
-    version = 8
-    version = 8
-
-Essentially, this means that ``with_propagation()`` recurses until no new
-``call_between_pulses()`` callbacks are registered.  That is, ``with_propagation()``
-tries to return the system to a stable state by repeatedly firing callbacks
-until there is nothing that still needs calling back.
-
-
 Data Pulse Axioms
 =================
 
@@ -200,37 +99,37 @@ necessary rules run).
 is initialized with a value that is less than the global update count will ever
 be::
 
-    >>> v = Input(42)
+    >>> v = Cell(value=42)
     >>> def rule(): print "computing"; return v.value
-    >>> c = Value(rule)
-    >>> c.pulse
-    -1
+    >>> c = Cell(rule)
+    >>> print c._version
+    None
 
 2. Global Update Counter: There is a global update counter that is incremented
 whenever an ``Input`` value is changed.  This guarantees that there is a
 globally-consistent notion of the "time" at which updates occur::
 
-    >>> from peak.events.trellis import state
+    >>> from peak.events.trellis import current_pulse
 
-    >>> start = state.pulse
-    >>> state.pulse - start
+    >>> start = current_pulse()
+    >>> current_pulse() - start
     0
 
 3. Inputs Move The System Forward: When an ``Input`` changes, it increments
 the global update count and stores the new value in its own update count::
 
-    >>> i = Input(22)
-    >>> state.pulse - start
-    1
+    >>> i = Cell(value=22)
+    >>> current_pulse() - start
+    0
 
-    >>> i.pulse - start
-    1
+    >>> print i._version
+    None
 
     >>> i.value = 21
-    >>> i.pulse - start
-    2
-    >>> state.pulse - start
-    2
+    >>> i._version - start
+    1
+    >>> current_pulse() - start
+    1
 
 4. XXX Out-of-dateness: A value is out of date if its update count is lower than
 the update count of any of the values it depends on.
@@ -249,7 +148,7 @@ is set, if it is an ``Input``), its update count must be equal to the global
 update count.  This guarantees that a rule will not run more than once per
 update::
 
-    >>> c.pulse == state.pulse
+    >>> c._version == current_pulse()
     True
 
     >>> c.value
@@ -278,13 +177,13 @@ notify them at most once if there is a change.
 
     >>> def rule():
     ...     print "computing", current_observer()
-    >>> v = Value(rule)
+    >>> v = Cell(rule)
 
     >>> print current_observer()   # between calculations
     None
 
     >>> v.value                 # during calculations
-    computing <peak.events.trellis.Value object at ...>
+    computing <...Cell object at ...>
 
     >>> print current_observer()   # returns to None
     None
@@ -299,7 +198,7 @@ notify them at most once if there is a change.
     ...     print "computing r2?", current_observer() is r2
     ...     return 42
 
-    >>> r1, r2 = Value(rule1), Value(rule2)
+    >>> r1, r2 = Cell(rule1), Cell(rule2)
     >>> r1.value        # verify that this works recursively
     computing r1? True
     computing r2? True
@@ -309,28 +208,28 @@ notify them at most once if there is a change.
 3. Dependency Creation: When a value is read, it adds the "currently-being
    evaluated" value as a listener that it will notify of changes::
 
-    >>> v1 = Input(99)
-    >>> v2 = Value(lambda: v1.value * 2)
-    >>> v3 = Value(lambda: v2.value * 2)
+    >>> v1 = Cell(value=99)
+    >>> v2 = Cell(lambda: v1.value * 2)
+    >>> v3 = Cell(lambda: v2.value * 2)
 
-    >>> v1.listeners()
+    >>> v1._listeners
     []
-    >>> v2.listeners()
+    >>> v2._listeners
     []
-    >>> v3.listeners()
+    >>> v3._listeners
     []
 
     >>> v2.value    # causes v1 to depend on v2
     198
-    >>> v1.listeners() == [v2]
+    >>> [q() for q in v1._listeners] == [v2]
     True
 
-    >>> v2.listeners()
+    >>> v2._listeners
     []
     >>> v3.value
     396
 
-    >>> v2.listeners() == [v3]
+    >>> [q() for q in v2._listeners] == [v3]
     True
 
 4. Dependency Creation Order: New listeners are added only *after* the value
@@ -339,27 +238,27 @@ notify them at most once if there is a change.
    receive redundant notification if the listened-to value has to be brought
    up-to-date first::
 
-    >>> i1 = Input(1)
-    >>> r1 = Value(lambda: i1.value)
-    >>> r2 = Value(lambda x=[]: x or x.append(r1.value))    # one-time rule
+    >>> i1 = Cell(value=1)
+    >>> r1 = Cell(lambda: i1.value)
+    >>> r2 = Cell(lambda x=[]: x or x.append(r1.value))    # one-time rule
     >>> print r2.value
     None
 
-    >>> i1.listeners() == [r1]   # r1 is i1's only listener
+    >>> [q() for q in i1._listeners] == [r1]   # r1 is i1's only listener
     True
-    >>> r1.listeners() == [r2]   # r2 is r1's only listener
+    >>> [q() for q in r1._listeners] == [r2]   # r2 is r1's only listener
     True
 
     >>> def showme():
     ...     r1.value    # r3 will be a listener of r1 now
-    ...     if r1.listeners()==[r3]:
+    ...     if [q() for q in r1._listeners]==[r3]:
     ...         print "listeners of r1==[r3]"
-    ...     elif r3 in r1.listeners():
+    ...     elif r3 in [q() for q in r1._listeners]:
     ...         print "subscribed"
-    ...     if r1.pulse >= state.pulse: print "r1 is up-to-date"
-    ...     if r2.pulse >= state.pulse: print "r2 is up-to-date"
+    ...     if r1._version >= current_pulse(): print "r1 is up-to-date"
+    ...     if r2._version >= current_pulse(): print "r2 is up-to-date"
 
-    >>> r3 = Value(showme)
+    >>> r3 = Cell(showme)
     >>> r3.value
     subscribed
     r1 is up-to-date
@@ -382,11 +281,11 @@ notify them at most once if there is a change.
    mandatory, the system behavior will be correct but inefficient if this
    requirement isn't met::
 
-   >>> i1 = Input(1)
-   >>> r1 = Value(lambda: i1.value + i1.value)
+   >>> i1 = Cell(value=1)
+   >>> r1 = Cell(lambda: i1.value + i1.value)
    >>> r1.value
    2
-   >>> i1.listeners()==[r1]
+   >>> [q() for q in i1._listeners]==[r1]
    True
 
 6. Dependency Removal: Just before a value's rule is run, it must cease to be a
@@ -429,11 +328,11 @@ notify them at most once if there is a change.
     garbage collection of either value::
 
     >>> del v3
-    >>> v2.listeners()
+    >>> v2._listeners
     []
 
     >>> del v2
-    >>> v1.listeners()
+    >>> v1._listeners
     []
 
 
@@ -447,11 +346,11 @@ value it depends on has changed since the value was last calculated.  The
 and the ``needs`` attribute records the latest version of any value this value
 depends on.  If ``needs>=pulse``, the value is out of date::
 
-    >>> x = Input(23)
+    >>> x = Cell(value=23)
     >>> def rule():
     ...     print "computing y from x"
     ...     return x.value * 2
-    >>> y = Value(rule)
+    >>> y = Cell(rule)
     >>> y.value
     computing y from x
     46
@@ -471,7 +370,7 @@ depends on.  If ``needs>=pulse``, the value is out of date::
     >>> def rule2():
     ...     print "computing z from y"
     ...     return y.value - 1
-    >>> z = Value(rule2)
+    >>> z = Cell(rule2)
     >>> z.value
     computing z from y
     19
@@ -501,9 +400,9 @@ a new dependency was set up.
     ...     else:
     ...         print "...done"
 
-    >>> A = Input(1)
-    >>> B = Input(2)
-    >>> C = Value(C_rule)
+    >>> A = Cell(value=1)
+    >>> B = Cell(value=2)
+    >>> C = Cell(C_rule)
 
     >>> C.value
     computing 1 2

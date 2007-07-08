@@ -1,34 +1,16 @@
+from peak.context import Service, get_ident, InputConflict
+from peak.util.symbols import NOT_GIVEN
 from weakref import ref
 
-try:
-    from thread import get_ident
-except ImportError:
-    from dummy_thread import get_ident
+_states = {}
+_sentinel = NOT_GIVEN   # XXX should get our own symbol for this
 
-computing = {}
+
+def current_pulse():
+    return _states.setdefault(get_ident(), [1, None])[0]
 
 def current_observer():
-    return computing.get(get_ident())
-
-def with_observer(value, rule, *args):
-    t = get_ident()
-    old = computing.get(t)
-    try:
-        computing[t] = value
-        return rule(*args)
-    finally:
-        computing[t] = old
-
-class Notifier(object):
-    __slots__ = '__weakref__', 'target', 'backlinks'
-
-    def __init__(self, target):
-        self.target = ref(target)
-        self.backlinks = []
-
-def run_deferred(deferred):
-    for cb, args in deferred:
-        cb(*args)
+    return _states.setdefault(get_ident(), [1, None])[1]
 
 
 
@@ -39,167 +21,226 @@ def run_deferred(deferred):
 
 
 
-class Trellis(object):
-    """Synchronizes recalculation and updates"""
-    pulse = 0
-    propagating = 0
 
-    def __init__(self):
-        self.deferred = []
-        self.dirty = {}
 
-    def with_propagation(self, routine, *args):
-        if self.propagating:
-            return routine(*args)
-        self.pulse += 1
-        self.propagating = True
-        try:
-            routine(*args)
-            while self.dirty:
-                for v in self.dirty.keys():
-                    v.ensure_clean()
-        finally:
-            self.propagating = False
-        # if anything was deferred, do it now
-        if self.deferred:
-            deferred, self.deferred = self.deferred, []
-            self.with_propagation(run_deferred, deferred)
 
-    def changed(self, value):
-        if not self.propagating:
-            return self.with_propagation(self.changed, value)
-        value.pulse = self.pulse
-        for value in value.pop_outputs():
-            self.dirty[value] = 1
 
-    def call_between_pulses(self, cb, *args):
-        if self.propagating:
-            self.deferred.append((cb,args))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class Cell(object):
+
+    def __init__(self, rule=None, value=None, event=False):
+        tid = get_ident()
+        if tid not in _states:
+            _states[tid] = [1, None]
+        self._state = _states[tid]
+        self._listeners = []
+        self._depends = self._changed_as_of = self._version = None
+        self._current_val = value
+        self._rule = rule
+        self._reset = (_sentinel, value)[bool(event)]
+        self._writebuf = _sentinel
+
+    def _get_value(self):
+        pulse, observer = self._state
+        if pulse is not self._version:
+            self.check_dirty(pulse)
+
+        if observer is not None and observer is not self:
+            depends = observer._depends
+            listeners = self._listeners
+            if self not in depends: depends.append(self)
+            r = ref(observer, listeners.remove)
+            if r not in listeners: listeners.append(r)
+
+        return self._current_val
+
+    def _set_value(self, value):
+        pulse, observer = self._state
+        if pulse is not self._version:
+            self.check_dirty(pulse)
+        old = self._writebuf
+        if old is not _sentinel and old is not value and old!=value:
+            raise InputConflict(old, value) # XXX
+        self._writebuf = value
+        EventLoop.do_once(self._advance, pulse+1) # schedule propagation
+
+    value = property(_get_value, _set_value)
+    del _get_value, _set_value
+
+    def check_dirty(self, pulse):
+        if pulse is self._version:
+            return pulse is self._changed_as_of
+
+        if self._reset is not _sentinel:
+            previous = self._current_val = self._reset
         else:
-            cb(*args)
+            previous = self._current_val
 
-state = Trellis()
+        self._version = pulse
+        new = self._writebuf
+        if new is not _sentinel:
+            self._writebuf = _sentinel
 
-class ValueHolder(object):
-    """Holder for a value that can change"""
-
-    __slots__ = [
-        '_cache', '_notifiers', 'pulse', '__weakref__', 'notifier',
-    ]
-
-    def __init__(self):
-        self.pulse = -1
-        self._notifiers = []
-        self.notifier = Notifier(self)
-
-    def read(self, value):
-        if value is not None:
-            notifiers = self._notifiers
-            r = ref(value.notifier, lambda r: notifiers.remove(r))
-            if r not in self._notifiers:
-                self._notifiers.append(r)
-                value.notifier.backlinks.append(self)
-
-    def _set_value(self, value, incr=1):
-        try:
-            c = self._cache
-        except AttributeError:
-            pass
+        elif self._rule:
+            deps = self._depends
+            if deps is None:    # make sure the rule gets run the first time!
+                new = self.recalculate()
+            else:
+                for d in deps:
+                    if d._changed_as_of is pulse or d._version is not pulse \
+                    and d.check_dirty(pulse):
+                        new = self.recalculate()
+                        break
+                else:
+                    new = previous
         else:
-            if c==value:
-                return
-        self._cache = value
-        state.changed(self)
-
-    def pop_outputs(self):
-        listeners = self.listeners()
-        del self._notifiers[:]       # clear the dependencies we're firing
-        return listeners
-
-    def listeners(self):
-        notifiers = filter(None, [n() for n in self._notifiers])
-        return      filter(None, [n.target() for n in notifiers])
-
-
-class Value(ValueHolder):
-    """Holder for a value that can change"""
-    __slots__ = 'rule'
-
-    def __init__(self, rule):
-        ValueHolder.__init__(self)
-        self.rule = rule
-
-    def is_dirty(self):
-        if self.pulse == state.pulse:   return False
-        elif self in state.dirty:       return True
-        elif not hasattr(self,'_cache'):
-            self._cache = with_observer(self, self.rule)
             return False
-        else:
-            for dep in self.notifier.backlinks:
-                if dep.is_dirty():
-                    return True
 
-    def ensure_clean(self):
-        if self.is_dirty():
-            self.notifier = Notifier(self)  # clear old deps
-            self._set_value(with_observer(self, self.rule))
-        self.pulse = state.pulse
-        if self in state.dirty:
-            del state.dirty[self]
-        if not self.notifier.backlinks:
-            self.become_constant()
+        if new is not previous and new != previous:
+            self._current_val = new
+            self._changed_as_of = pulse
+            do = EventLoop.do_once
+            listeners, self._listeners = self._listeners, []
+            # XXX become constant here if needed + possible
+            for c in listeners:
+                c = c()
+                if c is not None and c._version is not pulse:
+                    do(c.check_dirty, pulse)
+            return True
 
-    def value(self):
-        if self.pulse < state.pulse:
-            self.ensure_clean()
-        self.read(current_observer())   # subscribe my reader to me
-        return self._cache
-    value = property(value)
+    def _advance(self, pulse):        
+        if self._state[0] != pulse:
+            # XXX EventLoop.pulse = pulse
+            self._state[0] = pulse
+        self.check_dirty(pulse)
 
-    def become_constant(self):
-        del self._notifiers, self.rule, self.notifier
-        self.__class__ = Constant
+    def recalculate(self):
+        self._depends = []
+        pulse, old_observer = self._state
+        self._state[1] = self
+        try:
+            return self._rule()
+        finally:
+            self._state[1] = old_observer
 
+        
+class Constant(Cell):
+    """An immutable cell that no longer depends on anything else"""
 
-class Input(ValueHolder):
-    """A mutable value intended for inputs from non-trellis components"""
-
-    __slots__ = ()
-
-    def __init__(self, value):
-        ValueHolder.__init__(self)
-        self.notifier = Notifier(self)
-        self.value = value
-
-    def get_value(self):
-        self.read(current_observer())
-        return self._cache
-
-    def set_value(self, value):
-        state.call_between_pulses(self._set_value, value)
-
-    value = property(get_value, set_value)
-
-    def is_dirty(self):
-        return False    # XXX should have a test to prove this is needed
-
-class Constant(Value):
-    """An immutable value that no longer depends on anything else"""
-
-    __slots__ = ()
-    value = Input._cache
-    _notifiers = ()
+    #__slots__ = ()
+    #_notifiers = ()
+    value = None    # Cell._current_val
 
     def __init__(self, value):
-        self.value = value
+        self.value = value  # Cell._current_val.__set__(self, value)
 
     def __setattr__(self, name, value):
-        if hasattr(self,'_cache'):
+        if 'value' in self.__dict__: # XXX hasattr(self,'_cache'):
             raise AttributeError("Constants can't be changed")
         object.__setattr__(self, name, value)
 
-    def read(self, value): pass
+    def check_dirty(self, pulse):
+        return False
+
+
+
+
+
+
+
+
+class EventLoop(Service):
+    """Thing that runs tasks"""
+
+    _exit = None
+
+    def __init__(self):
+        self.queue = []
+
+    def running(self):
+        return self._exit is not None
+
+    def todo(self):
+        return len(self.queue)
+
+    def will_do(self, func, *args, **kw):
+        return (func,args,kw) in self.queue
+
+    def do(self, func, *args, **kw):
+        q = self.queue
+        q.append((func,args,kw))
+        if self._exit is not None:
+            return
+
+        self._exit = ()
+        try:
+            while q:
+                func, args, kw = q.pop(0)
+                retval = func(*args, **kw)
+                if self._exit:
+                    return self._exit[0]
+            return retval
+        finally:
+            retval = self._exit = None
+
+    def do_once(self, func, *args, **kw):
+        if (func,args,kw) not in self.queue:
+            self.do(func, *args, **kw)
+
+
+
+
+    def cancel(self, func, *args, **kw):
+        q = self.queue
+        action = (func,args,kw)
+        if action in q:
+            q.remove(action)
+
+    def exit(self, value=None):
+        self._exit = value,
+
+    def clear(self):
+        self.queue[:] = []
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
