@@ -1,8 +1,9 @@
 from peak.context import Service, get_ident, InputConflict
 from peak.util.symbols import Symbol
 from weakref import ref
+from heapq import heappush, heappop
 
-__all__ = ['Cell', 'Constant']
+__all__ = ['Cell', 'Constant', 'repeat']
 
 _states = {}
 
@@ -12,6 +13,10 @@ _sentinel = NO_VALUE
 
 def current_pulse():
     return _get_state()[0]
+
+def repeat():
+    """Schedule the current rule to be run again, repeatedly"""
+    return _TimerCell().value
 
 def current_observer():
     return _get_state()[1]
@@ -24,11 +29,6 @@ def _get_state():
     if tid not in _states:
         _states[tid] = [1, None, False]
     return _states[tid]
-
-
-
-
-
 
 
 
@@ -77,7 +77,7 @@ class ReadOnlyCell(object):
         return self._current_val
 
     value = property(_get_value)
-    del _get_value
+
 
 
     def check_dirty(self, pulse):
@@ -203,6 +203,28 @@ class Cell(ReadOnlyCell):
 
 
 
+class _TimerCell(ReadOnlyCell):
+
+    __slots__ = '_writebuf'
+    _can_freeze = False
+    rule = property(lambda s:None)
+
+    def __init__(self):
+        ReadOnlyCell.__init__(self)      
+
+    def check_dirty(self, pulse):
+        self._writebuf = pulse
+        return ReadOnlyCell.check_dirty(self, pulse)
+
+    def _get_value(self):
+        ReadOnlyCell.value.fget(self)
+        pulse, observer, runner = self._state
+        if self._listeners:
+            runner(self._advance, pulse+1)
+        return pulse
+
+    value = property(_get_value)
+
 class Constant(ReadOnlyCell):
     """An immutable cell that no longer depends on anything else"""
 
@@ -222,25 +244,44 @@ class Constant(ReadOnlyCell):
         return "Constant(%r)" % (self.value,)
 
 
-def run(func, *args):
+def run(func, pulse):
     """Trivial co-operative multitasking"""
     state = _get_state()
     old_runner = state[2]
     if old_runner:
-        return old_runner(func, *args)
+        return old_runner(func, pulse)
 
-    queue = [(func,args)]
+    queue = [(pulse, func)]
 
-    def runner(func, *args):
-        cmd = (func,args)
+    def runner(func, pulse):
+        cmd = (pulse, func)
         if cmd not in queue:
-            queue.append(cmd)
+            heappush(queue, cmd)
 
     state[2] = runner
     try:
         while queue:
-            func, args = queue.pop(0)
-            func(*args)
+            pulse, func = heappop(queue)
+            func(pulse)
     finally:
         state[2] = old_runner
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

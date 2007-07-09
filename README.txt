@@ -655,13 +655,26 @@ more::
     >>> inp.value
     1000
 
+Or, here's an easier way to force a rule to repeat itself::
+
+    >>> from peak.events.trellis import repeat
+    >>> def counter():
+    ...     if counter.value == 10:
+    ...         return counter.value
+    ...     repeat()
+    ...     return counter.value + 1
+    >>> counter = Cell(counter, 1)
+    >>> counter.value
+    10
+
+(It does nothing if invoked outside of an executing rule.)
+
 
 TODO
 ====
 
 * Allow custom comparison function for "changedness"
 
-* Allow rules to see their value owner, previous value, ???
-
 * Rollback
+
 
