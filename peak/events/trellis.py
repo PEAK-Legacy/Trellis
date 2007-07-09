@@ -2,9 +2,7 @@ from peak.context import Service, get_ident, InputConflict
 from peak.util.symbols import Symbol
 from weakref import ref
 
-__all__ = [
-    'Cell', 'Constant', 'EventLoop',
-]
+__all__ = ['Cell', 'Constant']
 
 _states = {}
 
@@ -13,17 +11,19 @@ NO_VALUE = Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
 
 def current_pulse():
-    return _states.setdefault(get_ident(), [1, None])[0]
+    return _get_state()[0]
 
 def current_observer():
-    return _states.setdefault(get_ident(), [1, None])[1]
+    return _get_state()[1]
 
+def current_runner():
+    return _get_state()[2]
 
-
-
-
-
-
+def _get_state():
+    tid = get_ident()
+    if tid not in _states:
+        _states[tid] = [1, None, False]
+    return _states[tid]
 
 
 
@@ -40,7 +40,6 @@ def current_observer():
 
 
 class ReadOnlyCell(object):
-
     __slots__ = """
         _state _listeners _depends _current_val _rule _reset _changed_as_of
         _version __weakref__
@@ -50,10 +49,7 @@ class ReadOnlyCell(object):
     _can_freeze = True
 
     def __init__(self, rule=None, value=None, event=False):
-        tid = get_ident()
-        if tid not in _states:
-            _states[tid] = [1, None]
-        self._state = _states[tid]
+        self._state = _get_state()
         self._listeners = []
         self._depends = self._changed_as_of = self._version = None
         self._current_val = value
@@ -61,24 +57,28 @@ class ReadOnlyCell(object):
         self._reset = (_sentinel, value)[bool(event)]
 
     def _get_value(self):
-        pulse, observer = self._state
+        pulse, observer, runner = self._state
         if pulse is not self._version:
-            self.check_dirty(pulse)
-
+            if not runner:
+                run(self.check_dirty, pulse)   # block until stable state
+            else:
+                self.check_dirty(pulse)
             if not self._depends and self._can_freeze and (self._reset
                 is _sentinel or self._changed_as_of is not pulse
-            ):  return self.freeze()
+            ):
+                return self.freeze()
+
         if observer is not None and observer is not self:
             depends = observer._depends
             listeners = self._listeners
             if self not in depends: depends.append(self)
             r = ref(observer, listeners.remove)
             if r not in listeners: listeners.append(r)
-
         return self._current_val
 
     value = property(_get_value)
     del _get_value
+
 
     def check_dirty(self, pulse):
         if pulse is self._version:
@@ -112,24 +112,24 @@ class ReadOnlyCell(object):
         if new is not previous and new != previous:
             self._current_val = new
             self._changed_as_of = pulse
-            do = EventLoop.do_once
+            runner = self._state[2] or run
             listeners, self._listeners = self._listeners, []
 
             for c in listeners:
                 c = c()
                 if c is not None and c._version is not pulse:
-                    do(c.check_dirty, pulse)
+                    runner(c.check_dirty, pulse)
             return True
 
-    def _advance(self, pulse):        
+    def _advance(self, pulse):
         if self._state[0] != pulse:
             # XXX EventLoop.pulse = pulse
             self._state[0] = pulse
-        self.check_dirty(pulse)
+        self.check_dirty(self._state[0])
 
     def recalculate(self):
         self._depends = []
-        pulse, old_observer = self._state
+        pulse, old_observer, runner = self._state
         self._state[1] = self
         try:
             return self._rule()
@@ -137,18 +137,18 @@ class ReadOnlyCell(object):
             self._state[1] = old_observer
 
     def _set_rule(self, rule):
-        pulse, observer = self._state
+        pulse, observer, runner = self._state
         if pulse is not self._version:
             self.check_dirty(pulse)
         self._rule = rule
         self._depends = None
-        EventLoop.do_once(self._advance, pulse+1) # schedule propagation
+        (runner or run)(self._advance, pulse+1) # schedule propagation
 
     rule = property(lambda s:s._rule, _set_rule)
     del _set_rule
 
     def freeze(self):
-        pulse, observer = self._state
+        pulse, observer, runner = self._state
         if pulse is not self._version:
             self.check_dirty(pulse)
         del self._depends, self._listeners
@@ -177,14 +177,14 @@ class Cell(ReadOnlyCell):
         self._writebuf = _sentinel
 
     def _set_value(self, value):
-        pulse, observer = self._state
+        pulse, observer, runner = self._state
         if pulse is not self._version:
             self.check_dirty(pulse)
         old = self._writebuf
         if old is not _sentinel and old is not value and old!=value:
             raise InputConflict(old, value) # XXX
         self._writebuf = value
-        EventLoop.do_once(self._advance, pulse+1) # schedule propagation
+        (runner or run)(self._advance, pulse+1) # schedule propagation
 
     value = property(ReadOnlyCell.value.fget, _set_value)
     del _set_value
@@ -222,107 +222,25 @@ class Constant(ReadOnlyCell):
         return "Constant(%r)" % (self.value,)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class EventLoop(Service):
-    """Thing that runs tasks"""
-
-    _exit = None
-
-    def __init__(self):
-        self.queue = []
-
-    def running(self):
-        return self._exit is not None
-
-    def todo(self):
-        return len(self.queue)
-
-    def will_do(self, func, *args, **kw):
-        return (func,args,kw) in self.queue
-
-    def do(self, func, *args, **kw):
-        q = self.queue
-        q.append((func,args,kw))
-        if self._exit is not None:
-            return
-
-        self._exit = ()
-        try:
-            while q:
-                func, args, kw = q.pop(0)
-                retval = func(*args, **kw)
-                if self._exit:
-                    return self._exit[0]
-            return retval
-        finally:
-            retval = self._exit = None
-
-    def do_once(self, func, *args, **kw):
-        if (func,args,kw) not in self.queue:
-            self.do(func, *args, **kw)
-
-
-
-
-    def cancel(self, func, *args, **kw):
-        q = self.queue
-        action = (func,args,kw)
-        if action in q:
-            q.remove(action)
-
-    def exit(self, value=None):
-        self._exit = value,
-
-    def clear(self):
-        self.queue[:] = []
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def run(func, *args):
+    """Trivial co-operative multitasking"""
+    state = _get_state()
+    old_runner = state[2]
+    if old_runner:
+        return old_runner(func, *args)
+
+    queue = [(func,args)]
+
+    def runner(func, *args):
+        cmd = (func,args)
+        if cmd not in queue:
+            queue.append(cmd)
+
+    state[2] = runner
+    try:
+        while queue:
+            func, args = queue.pop(0)
+            func(*args)
+    finally:
+        state[2] = old_runner
 

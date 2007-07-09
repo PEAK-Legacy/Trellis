@@ -631,6 +631,31 @@ so it immediately realizes it needs to recalculate.  X also notifies H first
 that a recalculation might be necessary.)
 
 
+Reading out-of-date values forces an event loop to be run::
+
+    >>> def dummy():
+    ...     from peak.events.trellis import current_runner
+    ...     print "running =", current_runner()
+    >>> Cell(dummy).value
+    running = <function runner at ...>
+
+That's because reading a value whose rule changes other values, must cause
+the other values to propagate, blocking until no values are changing any
+more::
+
+    >>> def out():
+    ...     r = inp.value + 1
+    ...     if r<=1000:
+    ...         inp.value = r
+    ...     return r
+    >>> out = Cell(out)
+    >>> inp = Cell(value=1)
+    >>> out.value
+    1001
+    >>> inp.value
+    1000
+
+
 TODO
 ====
 
