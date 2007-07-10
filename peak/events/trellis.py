@@ -16,7 +16,10 @@ def current_pulse():
 
 def repeat():
     """Schedule the current rule to be run again, repeatedly"""
-    return _TimerCell().value
+    pulse, observer, runner = _get_state()
+    observer._depends.insert(0, None)
+    runner(observer._advance, pulse+1)
+    return True # _TimerCell().value
 
 def current_observer():
     return _get_state()[1]
@@ -36,9 +39,6 @@ def _get_state():
 
 
 
-
-
-
 class ReadOnlyCell(object):
     __slots__ = """
         _state _listeners _depends _current_val _rule _reset _changed_as_of
@@ -51,7 +51,7 @@ class ReadOnlyCell(object):
     def __init__(self, rule=None, value=None, event=False):
         self._state = _get_state()
         self._listeners = []
-        self._depends = self._changed_as_of = self._version = None
+        self._depends = None,; self._changed_as_of = self._version = None
         self._current_val = value
         self._rule = rule
         self._reset = (_sentinel, value)[bool(event)]
@@ -83,29 +83,30 @@ class ReadOnlyCell(object):
     def check_dirty(self, pulse):
         if pulse is self._version:
             return pulse is self._changed_as_of
-
         if self._reset is not _sentinel:
             previous = self._current_val = self._reset
         else:
             previous = self._current_val
-
         self._version = pulse
         new = self._writebuf
         if new is not _sentinel:
             self._writebuf = _sentinel
-
         elif self._rule:
             deps = self._depends
-            if deps is None:    # make sure the rule gets run the first time!
-                new = self.recalculate()
-            else:
-                for d in deps:
-                    if d._changed_as_of is pulse or d._version is not pulse \
-                    and d.check_dirty(pulse):
-                        new = self.recalculate()
+            for d in deps:
+                if (not d or d._changed_as_of is pulse
+                     or d._version is not pulse and d.check_dirty(pulse)
+                ):
+                    self._depends = []
+                    tmp, old_observer, runner = state = self._state
+                    state[1] = self
+                    try:
+                        new = self._rule()
                         break
-                else:
-                    new = previous
+                    finally:
+                        state[1] = old_observer
+            else:
+                new = previous
         else:
             return False
 
@@ -114,7 +115,6 @@ class ReadOnlyCell(object):
             self._changed_as_of = pulse
             runner = self._state[2] or run
             listeners, self._listeners = self._listeners, []
-
             for c in listeners:
                 c = c()
                 if c is not None and c._version is not pulse:
@@ -127,21 +127,12 @@ class ReadOnlyCell(object):
             self._state[0] = pulse
         self.check_dirty(self._state[0])
 
-    def recalculate(self):
-        self._depends = []
-        pulse, old_observer, runner = self._state
-        self._state[1] = self
-        try:
-            return self._rule()
-        finally:
-            self._state[1] = old_observer
-
     def _set_rule(self, rule):
         pulse, observer, runner = self._state
         if pulse is not self._version:
             self.check_dirty(pulse)
         self._rule = rule
-        self._depends = None
+        self._depends = None,
         (runner or run)(self._advance, pulse+1) # schedule propagation
 
     rule = property(lambda s:s._rule, _set_rule)
@@ -158,6 +149,15 @@ class ReadOnlyCell(object):
     def __repr__(self):
         e = ('', ', event[%r]'% self._reset)[self._reset is not _sentinel]
         return "%s(%r, %r%s)" %(self.__class__.__name__,self.rule,self.value,e)
+
+
+
+
+
+
+
+
+
 
 
 
@@ -203,28 +203,6 @@ class Cell(ReadOnlyCell):
 
 
 
-class _TimerCell(ReadOnlyCell):
-
-    __slots__ = '_writebuf'
-    _can_freeze = False
-    rule = property(lambda s:None)
-
-    def __init__(self):
-        ReadOnlyCell.__init__(self)      
-
-    def check_dirty(self, pulse):
-        self._writebuf = pulse
-        return ReadOnlyCell.check_dirty(self, pulse)
-
-    def _get_value(self):
-        ReadOnlyCell.value.fget(self)
-        pulse, observer, runner = self._state
-        if self._listeners:
-            runner(self._advance, pulse+1)
-        return pulse
-
-    value = property(_get_value)
-
 class Constant(ReadOnlyCell):
     """An immutable cell that no longer depends on anything else"""
 
@@ -265,23 +243,4 @@ def run(func, pulse):
             func(pulse)
     finally:
         state[2] = old_runner
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

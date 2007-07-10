@@ -678,3 +678,62 @@ TODO
 * Rollback
 
 
+
+Feature Comparisons
+-------------------
+
++-----------------------------------------+---------+---------+-----------+
+| Feature                                 | Trellis | PyCells | Cellulose |
++=========================================+=========+=========+===========+
+| Mutually-recursive/circular rules       | YES     | NO      | NO        |
++-----------------------------------------+---------+---------+-----------+
+| Changed rules get recalculated ASAP     | YES     | NO [1]_ | ?         |
++-----------------------------------------+---------+---------+-----------+
+| Cells can be used independently,        | YES     | NO      | YES       |
+| without attachment to an "owner" or     |         |         |           |
+| other object                            |         |         |           |
++-----------------------------------------+---------+---------+-----------+
+| Only one constructor needed for all     | YES     | NO [2]_ | NO        |
+| cell types?                             |         |         |           |
++-----------------------------------------+---------+---------+-----------+
+| Observers/side-effects allowed directly | YES     | NO      | ?         |
+| in rules?                               |         |         |           |
++-----------------------------------------+---------+---------+-----------+
+| "Ephemeral" or "event" cells            | YES     | YES     | NO        |
++-----------------------------------------+---------+---------+-----------+
+| Threading model [3]_                    | Free    | Free    | Blocking  |
++-----------------------------------------+---------+---------+-----------+
+| Pluggable event loop support            | YES     | NO      | NO        |
++-----------------------------------------+---------+---------+-----------+
+| Minimum memory requirement for each     | 88      | 164     | 632       |
+| cell object, not including rules or     |         |         |           |
+| contents, measured in bytes of          |         |         |           |
+| ``__basicsize__`` at initialization     |         |         |           |
+| time                                    |         |         |           |
++-----------------------------------------+---------+---------+-----------+
+| Conflict detection/race prevention      | YES     | NO      | NO        |
+| (Ensures that multiple sets to same     |         |         |           |
+| cell within one propagation pulse       |         |         |           |
+| must match, preventing any ordering     |         |         |           |
+| dependencies from sneaking in.)         |         |         |           |
++-----------------------------------------+---------+---------+-----------+
+| Easy construction of "model" objects    | Soon    | YES     | YES       |
++-----------------------------------------+---------+---------+-----------+
+| Data structure types included           | Soon    | YES     | YES       |
++-----------------------------------------+---------+---------+-----------+
+
+
+.. [1] See http://lateral.netmanagers.com.ar/weblog/2007/05/22.html for an
+       example of the problem; Trellis successfully handles this example.
+
+.. [2] PyCells has a single cell *attribute* constructor, makecell; but 
+
+.. [3] Trellis and PyCells allow threads to freely operate on *separate* sets
+       of cells without blocking -- the so-called "shared nothing" model.
+       Cellulose has locking code that allows cells to be shared between
+       threads, but even single-threaded code pays the price of locking.
+       Trellis (and in principle PyCells) can communicate between threads using
+       ``Queue.Queue`` objects to link one thread's cells to those of another.
+
+
+
