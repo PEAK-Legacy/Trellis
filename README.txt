@@ -119,6 +119,24 @@ Circular calculations::
     >>> F.value
     -40.0
 
+    >>> def temp():
+    ...     if C.value<10:
+    ...         print "Brrrrr!"
+    >>> temp = Cell(temp)
+    >>> temp.value
+    Brrrrr!
+
+    >>> F.value = 212
+    >>> C.value
+    100.0
+    >>> F.value = 0
+    Brrrrr!
+    >>> C.value = 9
+    Brrrrr!
+    >>> F.value = 30
+    Brrrrr!    
+
+    >>> del temp
 
 Spreadsheet simulation (XXX this doesn't work in Python 2.3, which )::
 
@@ -358,7 +376,7 @@ notify them at most once if there is a change.
 
     >>> v2.value    # causes v1 to depend on v2
     198
-    >>> [q() for q in v1._listeners] == [v2]
+    >>> [q().owner() for q in v1._listeners] == [v2]
     True
 
     >>> v2._listeners
@@ -366,7 +384,7 @@ notify them at most once if there is a change.
     >>> v3.value
     396
 
-    >>> [q() for q in v2._listeners] == [v3]
+    >>> [q().owner() for q in v2._listeners] == [v3]
     True
 
 4. Dependency Creation Order: New listeners are added only *after* the value
@@ -381,16 +399,16 @@ notify them at most once if there is a change.
     >>> print r2.value
     None
 
-    >>> [q() for q in i1._listeners] == [r1]   # r1 is i1's only listener
+    >>> [q().owner() for q in i1._listeners] == [r1]   # r1 is i1's only listener
     True
-    >>> [q() for q in r1._listeners] == [r2]   # r2 is r1's only listener
+    >>> [q().owner() for q in r1._listeners] == [r2]   # r2 is r1's only listener
     True
 
     >>> def showme():
     ...     r1.value    # r3 will be a listener of r1 now
-    ...     if [q() for q in r1._listeners]==[r3]:
+    ...     if [q().owner() for q in r1._listeners]==[r3]:
     ...         print "listeners of r1==[r3]"
-    ...     elif r3 in [q() for q in r1._listeners]:
+    ...     elif r3 in [q().owner() for q in r1._listeners]:
     ...         print "subscribed"
     ...     if r1._version.number >= current_pulse(): print "r1 is up-to-date"
     ...     if r2._version.number >= current_pulse(): print "r2 is up-to-date"
@@ -426,7 +444,7 @@ notify them at most once if there is a change.
    >>> r1 = Cell(lambda: i1.value + i1.value)
    >>> r1.value
    2
-   >>> [q() for q in i1._listeners]==[r1]
+   >>> [q().owner() for q in i1._listeners]==[r1]
    True
 
 6. Dependency Removal: Just before a value's rule is run, it must cease to be a

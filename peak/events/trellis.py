@@ -5,9 +5,7 @@ from weakref import ref
 __all__ = ['Cell', 'Constant', 'repeat']
 
 _states = {}
-
 NO_VALUE = Symbol('NO_VALUE', __name__)
-
 _sentinel = NO_VALUE
 
 def current_pulse():
@@ -19,7 +17,7 @@ def current_observer():
 def repeat():
     """Schedule the current rule to be run again, repeatedly"""
     pulse, observer, todo = _get_state()
-    observer._depends.insert(0, None)   # mark calling rule for recalc
+    observer._mailbox.dependencies.insert(0, None)   # mark calling rule for recalc
     todo.data.append(observer)          # and schedule it for the next pulse
     return True
 
@@ -35,23 +33,25 @@ class Pulse(object):
         self.data = []
         self.number = number
 
-
-
-
+class Mailbox(object):
+    __slots__ = '__weakref__', 'owner', 'dependencies'
+    def __init__(self, owner, *args):
+        self.owner = ref(owner)
+        self.dependencies = list(args)
 
 class ReadOnlyCell(object):
     __slots__ = """
-        _state _listeners _depends _current_val _rule _reset _changed_as_of
+        _state _listeners _mailbox _current_val _rule _reset _changed_as_of
         _version __weakref__
     """.split()
-
     _writebuf = _sentinel
     _can_freeze = True
 
     def __init__(self, rule=None, value=None, event=False):
         self._state = _get_state()
         self._listeners = []
-        self._depends = None,; self._changed_as_of = self._version = None
+        self._mailbox = Mailbox(self, None)
+        self._changed_as_of = self._version = None
         self._current_val = value
         self._rule = rule
         self._reset = (_sentinel, value)[bool(event)]
@@ -61,24 +61,24 @@ class ReadOnlyCell(object):
         if pulse is not self._version:
             self.check_dirty(pulse)
             if observer is None: cleanup()
-            if not self._depends and self._can_freeze and (self._reset
+            if not self._mailbox.dependencies and self._can_freeze and (self._reset
                 is _sentinel or self._changed_as_of is not pulse
             ):
-                del self._depends, self._listeners
+                del self._mailbox, self._listeners
                 self.__class__ = Constant
                 return self._current_val
 
         if observer is not None and observer is not self:
-            depends = observer._depends
+            mailbox = observer._mailbox
+            depends = mailbox.dependencies
             listeners = self._listeners
             if self not in depends: depends.append(self)
-            r = ref(observer, listeners.remove)
+            r = ref(mailbox, listeners.remove)
             if r not in listeners: listeners.append(r)
 
         return self._current_val
 
     value = property(_get_value)
-
 
     def check_dirty(self, pulse):
         if pulse is self._version:
@@ -92,12 +92,11 @@ class ReadOnlyCell(object):
         if new is not _sentinel:
             self._writebuf = _sentinel
         elif self._rule:
-            deps = self._depends
-            for d in deps:
+            for d in self._mailbox.dependencies:
                 if (not d or d._changed_as_of is pulse
                      or d._version is not pulse and d.check_dirty(pulse)
                 ):
-                    self._depends = []
+                    self._mailbox = Mailbox(self)  # break old dependencies
                     tmp, old_observer, todo = state = self._state
                     state[1] = self
                     try:
@@ -113,11 +112,12 @@ class ReadOnlyCell(object):
         if new is not previous and new != previous:
             self._current_val = new
             self._changed_as_of = pulse
-            listeners, self._listeners = self._listeners, []
-            for c in listeners:
+            for c in self._listeners:
                 c = c()
-                if c is not None and c._version is not pulse:
-                    pulse.data.append(c)
+                if c is not None:
+                    c = c.owner()
+                    if c is not None and c._version is not pulse:
+                        pulse.data.append(c)
             return True
 
 
@@ -126,7 +126,7 @@ class ReadOnlyCell(object):
         if pulse is not self._version:
             self.check_dirty(pulse)
         self._rule = rule
-        self._depends = None,
+        self._mailbox = Mailbox(self, None)
         todo.data.append(self)
         if not observer: cleanup()
 
@@ -145,7 +145,7 @@ class Constant(ReadOnlyCell):
     value = ReadOnlyCell._current_val
 
     _can_freeze = False
-    _depends = None
+    _mailbox = None
 
     def __init__(self, value):
         ReadOnlyCell._current_val.__set__(self, value)
@@ -165,11 +165,11 @@ class Constant(ReadOnlyCell):
 def cleanup():
     pulse, observer, todo = state = _get_state()
     while todo.data:
+        pulse.data = None   # don't keep a list around any longer
         pulse = state[0] = todo
         todo = state[2] = Pulse(pulse.number+1)
         for item in pulse.data:
             item.check_dirty(pulse)
-        pulse.data = None   # don't keep a list around any longer
         
 
 class Cell(ReadOnlyCell):
