@@ -262,7 +262,7 @@ the global update count and stores the new value in its own update count::
     None
 
     >>> i.value = 21
-    >>> i._version - start
+    >>> i._version.number - start
     1
     >>> current_pulse() - start
     1
@@ -284,7 +284,7 @@ is set, if it is an ``Input``), its update count must be equal to the global
 update count.  This guarantees that a rule will not run more than once per
 update::
 
-    >>> c._version == current_pulse()
+    >>> c._version.number == current_pulse()
     True
 
     >>> c.value
@@ -392,8 +392,8 @@ notify them at most once if there is a change.
     ...         print "listeners of r1==[r3]"
     ...     elif r3 in [q() for q in r1._listeners]:
     ...         print "subscribed"
-    ...     if r1._version >= current_pulse(): print "r1 is up-to-date"
-    ...     if r2._version >= current_pulse(): print "r2 is up-to-date"
+    ...     if r1._version.number >= current_pulse(): print "r1 is up-to-date"
+    ...     if r2._version.number >= current_pulse(): print "r2 is up-to-date"
 
     >>> r3 = Cell(showme)
     >>> r3.value
@@ -631,17 +631,8 @@ so it immediately realizes it needs to recalculate.  X also notifies H first
 that a recalculation might be necessary.)
 
 
-Reading out-of-date values forces an event loop to be run::
-
-    >>> def dummy():
-    ...     from peak.events.trellis import current_runner
-    ...     print "running =", current_runner()
-    >>> Cell(dummy).value
-    running = <function runner at ...>
-
-That's because reading a value whose rule changes other values, must cause
-the other values to propagate, blocking until no values are changing any
-more::
+Reading a value whose rule changes other values, causes the other values to
+propagate, blocking until no values are changing any more::
 
     >>> def out():
     ...     r = inp.value + 1
