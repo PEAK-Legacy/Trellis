@@ -1,15 +1,13 @@
 #!/usr/bin/env python
 """Distutils setup file"""
-
-#import ez_setup
-#ez_setup.use_setuptools()
+import ez_setup
+ez_setup.use_setuptools()
 from setuptools import setup
 
 # Metadata
 PACKAGE_NAME = "Trellis"
 PACKAGE_VERSION = "0.0.1"
 PACKAGES = ['peak', 'peak.events']
-
 def get_description():
     # Get our long description from the documentation
     f = file('README.txt')
@@ -36,6 +34,8 @@ setup(
     test_suite = 'test_trellis',
     packages = PACKAGES,
     namespace_packages = PACKAGES,
-    install_requires = ['Contextual>=0.7.dev-r2334', 'SymbolType>=1.0'],
+    install_requires = [
+        'Contextual>=0.7.dev-r2334', 'SymbolType>=1.0', 'ObjectRoles>=0.5'
+    ],
 )
 
