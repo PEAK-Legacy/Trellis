@@ -1,18 +1,18 @@
 from peak.context import Service, get_ident, InputConflict
 from peak.util.symbols import Symbol
 from weakref import ref
+from peak.util.roles import Role, Registry
+from peak.util.decorators import decorate, struct, decorate_assignment
+import sys
 
-__all__ = ['Cell', 'Constant', 'repeat']
+__all__ = [
+    'Cell', 'Constant', 'repeat', 'rule', 'rules', 'event', 'events', 'value',
+    'values', 'optional', 'cell_factory', 'cell_factories', 'Component',
+]
 
 _states = {}
 NO_VALUE = Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
-
-def current_pulse():
-    return _get_state()[0].number
-
-def current_observer():
-    return _get_state()[1]
 
 def repeat():
     """Schedule the current rule to be run again, repeatedly"""
@@ -170,7 +170,7 @@ def cleanup():
         todo = state[2] = Pulse(pulse.number+1)
         for item in pulse.data:
             item.check_dirty(pulse)
-        
+
 
 class Cell(ReadOnlyCell):
 
@@ -200,6 +200,211 @@ class Cell(ReadOnlyCell):
     value = property(ReadOnlyCell.value.fget, _set_value)
     del _set_value
 
+def current_pulse():    return _get_state()[0].number
+def current_observer(): return _get_state()[1]
+
+class CellValues(Registry):
+    """Registry for cell values"""
+
+class CellRules(Registry):
+    """Registry for cell rules"""
+
+class _Defaulting(Registry):
+    def __init__(self, subject):
+        self.defaults = {}
+        return super(_Defaulting, self).__init__(subject)
+
+    def created_for(self, cls):
+        for k,v in self.defaults.items():
+            self.setdefault(k, v)
+        return super(_Defaulting, self).created_for(cls)
+
+class CellFactories(_Defaulting):
+    """Registry for cell factories"""
+
+class IsOptional(_Defaulting):
+    """Registry for flagging that an attribute need not be activated"""
+
+class EventFlags(_Defaulting):
+    """Registry for flagging that a cell is an event"""
+
+def default_factory(typ, ob, name):
+    """Default factory for making cells"""
+    rule = CellRules(typ).get(name)
+    value = CellValues(typ).get(name, _sentinel)
+    event = EventFlags(typ).get(name, False)
+    if rule is not None:
+        rule = rule.__get__(ob, typ)
+    if value is _sentinel:
+        return Cell(rule, event=event)
+    return Cell(rule, value, event)
+
+class Cells(Role):
+    __slots__ = ()
+    role_key = classmethod(lambda cls: '__cells__')
+    def __new__(cls, subject): return {}
+
+def _invoke_callback(
+    extras, func=_sentinel, value=_sentinel, __frame=None, __name=None
+):
+    frame = __frame or sys._getframe(2)
+    name  = __name
+    items = list(extras)
+
+    if func is not _sentinel:
+        items.append((CellRules, func))
+        if func is not None and func.__name__!='<lambda>':
+            name = name or func.__name__
+
+    if value is not _sentinel:
+        items.append((CellValues, value))
+
+    def callback(frame, name, func, locals):
+        for role, value in items:
+            role.for_frame(frame).set(name, value)
+        EventFlags.for_frame(frame).defaults[name] = False
+        IsOptional.for_frame(frame).defaults[name] = False
+        CellFactories.for_frame(frame).defaults[name] = default_factory
+        return CellProperty(name)
+
+    if name:
+        return callback(frame, name, func, None)        
+    else:
+        decorate_assignment(callback, frame=frame)
+        return _sentinel
+
+def optional(func=_sentinel, value=_sentinel, **kw):
+    if '__modifier' in kw:
+        IsOptional.for_frame(kw['__frame']).set(kw['__name'], True)
+        return CellProperty(kw['__name'])
+    elif isinstance(func, CellProperty):
+        IsOptional.for_enclosing_class().set(func.__name__, True)
+        return func
+    else:
+        return _invoke_callback([(IsOptional, True)], func, value, **kw)
+
+
+
+def event(func=None, value=_sentinel, **kw):
+    if '__modifier' in kw:
+        EventFlags.for_frame(kw['__frame']).set(kw['__name'], True)
+        return CellProperty(kw['__name'])
+    elif isinstance(func, CellProperty):
+        EventFlags.for_enclosing_class().set(func.__name__, True)
+        return func
+    else:
+        items = [(EventFlags, True), (CellFactories, default_factory)]
+        return _invoke_callback(items, func, value, **kw)
+
+def rule(func, **kw):
+    if isinstance(func, CellProperty):
+        raise TypeError("rule decorator must wrap a function directly")
+    else:
+        items = [(CellRules, func), (CellFactories, default_factory)]
+        return _invoke_callback(items, func, **kw)
+
+def cell_factory(func, **kw):
+    if isinstance(func, CellProperty):
+        raise TypeError("cell_factory decorator must wrap a function directly")
+    else:
+        items = [
+            (CellFactories, Factory(func)), (CellValues, _sentinel),
+            (EventFlags, False)
+        ]
+        if func.__name__ !='<lambda>': kw.setdefault('__name', func.__name__)
+        return _invoke_callback(items, None, **kw)
+
+def value(value, **kw):
+    if isinstance(value, CellProperty):
+        raise TypeError("value() must wrap a value directly")
+    else:
+        items = [(CellFactories, default_factory)]
+        return _invoke_callback(items, value=value, **kw)
+
+
+
+
+
+
+struct(__call__ = lambda self, typ, ob, name: self.func(ob))
+def Factory(func):
+    return func,
+
+def _set_multi(frame, modifiers, kw, wrap, arg='func'):
+    for k, v in kw.items():
+        v = wrap(__name=k, __frame=frame, **{arg:v})
+        frame.f_locals.setdefault(k, v)
+        for m in modifiers:
+            v = m(__name=k, __frame=frame, __modifier=True, **{arg:v})
+
+def rules(*modifiers, **kw):
+    _set_multi(sys._getframe(1), modifiers, kw, rule)
+
+def events(*modifiers, **kw):
+    _set_multi(sys._getframe(1), modifiers, kw, event)
+
+def cell_factories(*modifiers, **kw):
+    _set_multi(sys._getframe(1), modifiers, kw, cell_factory)
+
+def values(*modifiers, **kw):
+    _set_multi(sys._getframe(1), modifiers, kw, value, 'value')
+
+class Component(object):
+    """Base class for objects with Cell attributes"""
+    __slots__ = ()
+    def __init__(self, **kw):
+        cls = type(self)
+        self.__cells__ = Cells(self)
+        for k, v in kw.iteritems():
+            if not hasattr(cls, k):
+                raise TypeError("%s() has no keyword argument %r"
+                    % (cls.__name__, k)
+                )
+            setattr(self, k, v)
+        for k, v in IsOptional(cls).iteritems():
+            if not v:
+                getattr(self, k)
+
+
+
+class CellProperty(object):
+    """Descriptor for cell-based attributes"""
+
+    def __init__(self, name):
+        self.__name__ = name
+
+    def __repr__(self):
+        return "CellProperty(%r)" % self.__name__
+
+    def __get__(self, ob, typ=None):
+        if ob is None:
+            return self
+        try:
+            cell = ob.__cells__[self.__name__]
+        except KeyError:
+            name = self.__name__
+            cell =  CellFactories(typ)[name](typ, ob, name)
+            cell = ob.__cells__.setdefault(name, cell)
+        return cell.value
+
+    def __set__(self, ob, value):
+        if isinstance(value, ReadOnlyCell):
+            ob.__cells__[self.__name__] = value
+        else:
+            try:
+                cell = ob.__cells__[self.__name__]
+            except KeyError:
+                name = self.__name__
+                typ = type(ob)
+                cell =  CellFactories(typ)[name](typ, ob, name)
+                cell = ob.__cells__.setdefault(name, cell)
+            cell.value = value
+
+    def __eq__(self, other):
+        return type(other) is CellProperty and other.__name__==self.__name__
+
+    def __ne__(self, other):
+        return type(other) is not CellProperty or other.__name__!=self.__name__
 
 
 
