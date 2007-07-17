@@ -1,4 +1,4 @@
-from peak.context import Service, get_ident, InputConflict
+from peak.context import get_ident, InputConflict
 from peak.util.symbols import Symbol
 from weakref import ref
 from peak.util.roles import Role, Registry

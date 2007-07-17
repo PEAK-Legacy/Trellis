@@ -1,748 +1,161 @@
-===============================================================
-Event-Driven Dependency Management with ``peak.events.trellis``
-===============================================================
+===================================================================
+Event-Driven Programming The Easy Way, with ``peak.events.trellis``
+===================================================================
 
-``peak.events.trellis`` is a dependency management framework for updating
-values in a program.  When a value is changed, other values are automatically
-updated, and code can be run to respond to value changes, somewhat like a
-spreadsheet.
+Whether it's an application server or a desktop application, any sufficiently
+complex system is event-driven -- and that usually means callbacks.
 
-There are two things that are different from most other dependency-management
-tools: synchronous updating, and automatic dependency discovery.
+Unfortunately, explicit callback management is to event-driven programming what
+explicit memory management is to most other kinds of programming: a tedious
+hassle and a significant source of unnecessary bugs.
 
-Synchronous updates means that all values are conceptually updated in lockstep,
-such that there is never a time when the program's state is inconsistent due to
-values being updated out of order.  In most event-driven systems, updates
-are *asynchronous*, meaning that any value can change at any time, and some
-values might change multiple times in response to a single input change,
-leading to subtle bugs, especially as programs become more complex.
+For example, even in a single-threaded program, callbacks can create race
+conditions, due to the callbacks being made in an unexpected order.  If a piece
+of code can cause callbacks to be fired "in the middle of something", both that
+code *and* the callbacks can get confused.
 
-In contrast, synchronous updates ensure that every relevant value is updated
-at most once for a change in a given input, making the system's dynamic
-behavior easier to understand and far more likely to be bug-free.
+Of course, that's why most GUI libraries and other large event-driven systems
+usually have some way for you to temporarily block callbacks from happening.
+This lets you fix or workaround your callback order dependency bugs...  at the
+cost of adding even *more* tedious callback management.  And it still doesn't
+fix the problem of forgetting to cancel callbacks...  or register needed ones
+in the first place!
 
-Automatic dependency discovery means that there is no need to explicitly
-"subscribe" or "listen" to anything.  Values that use other values in their
-calculations automatically become dependent on the values they use.  If a
-subsequent recalculation results in a new dependency relationship, that's kept
-up-to-date also.
+The Trellis solves these problems by introducing *automatic* callback
+management, in much the same way that Python does automatic memory management.
+Instead of worrying about subscribing or "listening" to events, and managing
+the order of callbacks, you just write rules to compute values.  The Trellis
+"sees" what values your rules access, and thus knows what rules may need to be
+rerun when something changes.
 
-The concepts and algorithms used are courtesy of two systems, the "trellis
-process architecture" described by David Gelernter in his book, "Mirror
-Worlds", and the Lisp "Cells" library by Ken Tilton.  ``peak.events.trellis``
-also takes some of its terminology from the Smalltalk "Value Model" frameworks.
+But even more important, it also ensures that callbacks *can't* happen while
+code is "in the middle of something".  Any action a piece of code takes that
+would cause a new event to fire is automatically deferred until all of the
+current event's listeners have been updated.  And, if you try to access the
+value of a rule that hasn't been updated yet, it's updated on the fly so it
+reflects the current event-in-progress.
+
+No stale data.  No race conditions.  No callback management.  That's the
+Trellis in action.
+
+Here's a super-trivial example::
+
+    >>> from peak.events import trellis
+
+    >>> class TempConverter(trellis.Component):
+    ...     trellis.values(
+    ...         F = 32,
+    ...         C = 0,
+    ...     )
+    ...     trellis.rules(
+    ...         F = lambda self: self.C * 1.8 + 32,
+    ...         C = lambda self: (self.F - 32)/1.8,
+    ...     )
+    ...     #@trellis.rule   <-- decorator can be used in Python 2.4+
+    ...     def show_values(self):
+    ...         print "Celsius......", self.C
+    ...         print "Fahrenheit...", self.F
+    ...     show_values = trellis.rule(show_values)
+
+    >>> tc = TempConverter(C=100)
+    Celsius...... 100
+    Fahrenheit... 212.0
+
+    >>> tc.F = 32
+    Celsius...... 0.0
+    Fahrenheit... 32
+
+    >>> tc.C = -40
+    Celsius...... -40
+    Fahrenheit... -40.0
+
+As you can see, each attribute is updated if the other one changes, and the
+``show_values`` rule is invoked any time the dependent values change...  but
+not if they don't::
+
+    >>> tc.C = -40
+
+Since the value didn't change, none of the rules based on it were recalculated.
+
+Now, imagine all this, but scaled up to include rules that can depend on things
+like how long it's been since something happened...  whether a mouse button was
+clicked...  whether a socket is readable...  or whether a Twisted "deferred"
+object has fired.  With automatic dependency tracking that spans function
+calls, so you don't even need to *know* what values your rule depends on, let
+alone having to explicitly code any dependencies in!
+
+Imagine painless MVC, where you simply write rules like the above to update
+GUI widgets with application values... and vice versa.
+
+And then, you'll have the tiny beginning of a mere glimpse...  of what the
+Trellis can do for you.
+
+Other Python libraries exist which attempt to do similar things, of course;
+PyCells and Cellulose are two.  However, only the Trellis supports fully
+circular rules (like the temperature conversion example above), and intra-pulse
+write conflict detection.  The Trellis also uses less memory for each cell
+(rule/value object), and offers many other features that either PyCells or
+Cellulose lack.
+
+Questions, discussion, and bug reports for this software should be directed to
+the PEAK mailing list; see http://www.eby-sarna.com/mailman/listinfo/PEAK/
+for details.
 
 
 .. contents:: **Table of Contents**
 
 
---------------
-Programmer API
---------------
+------------------
+Programmer's Guide
+------------------
 
 
-Cell Objects
-=============
+The Primary Principles:
 
-``Cell`` objects are the basis of the framework.  Each holds a value upon
-which other values may depend.  There are two basic value types, ``Cell`` and
-``Constant``::
+* Avoid writing to cells in rules; writing is for non-trellis code
 
-    >>> from peak.events.trellis import Cell, Constant
-    
-``Cell`` objects can hold a value::
+* If you must write, either write from only one rule, or write only one value!
 
-    >>> v = Cell(value=42)
-    >>> v.value
-    42
+* If you care what order two things happen in, make them happen in the same
+  rule.
 
-or use a *rule* to determine their value::
 
-    >>> v_times_two = Cell(rule=lambda: v.value * 2)
-    >>> v_times_two.value
-    84
 
-And that value always reflects the current values of any values that it depends
-on::
+-------------
+API Reference
+-------------
 
-    >>> v.value = 23
-    >>> v_times_two.value
-    46
+Component, Cell, Constant, repeat, rule, rules, event, events, value,
+values, optional, cell_factory, cell_factories
 
-``Constant`` values are initialized with a value, and are unchangeable
-thereafter::
+__cells__ attribute
 
-    >>> c = Constant(99)
-    >>> c.value
-    99
-    >>> c.value -= 1
-    Traceback (most recent call last):
-      ...
-    AttributeError: Constants can't be changed
+component class metadata?
 
-Most of the time you won't use ``Constant`` objects directly, though, because
-if a ``Cell`` has a rule but no initial value, it becomes a ``ReadOnlyCell``,
-and if at some point it no longer depends on any other cell, it becomes
-a ``Constant`` automatically after the next time it's read::
 
-    >>> def rule():
-    ...     print "computing"
-    ...     return 1
-    
-    >>> c = Cell(rule)
-    >>> c   # repr() uses .value, which reads the cell, causing rule to run...
-    computing
-    ReadOnlyCell(<function rule...>, 1)
 
-    >>> c   # The rule didn't use any other cells, so we need never recalculate
-    Constant(1)
-
-
-Demos
------
-
-Circular calculations::
-
-    >>> F = Cell(lambda: C.value*1.8 + 32, 32)
-    >>> C = Cell(lambda: (F.value-32)/1.8, 0)
-    >>> F.value
-    32
-    >>> C.value
-    0
-    >>> F.value = 212
-    >>> C.value
-    100.0
-    >>> C.value = 0
-    >>> F.value
-    32.0
-    >>> C.value = -40
-    >>> F.value
-    -40.0
-
-    >>> def temp():
-    ...     if C.value<10:
-    ...         print "Brrrrr!"
-    >>> temp = Cell(temp)
-    >>> temp.value
-    Brrrrr!
-
-    >>> F.value = 212
-    >>> C.value
-    100.0
-    >>> F.value = 0
-    Brrrrr!
-    >>> C.value = 9
-    Brrrrr!
-    >>> F.value = 30
-    Brrrrr!    
-
-    >>> del temp
-
-Spreadsheet simulation (XXX this doesn't work in Python 2.3, which )::
-
-    >>> from UserDict import DictMixin, UserDict
-    >>> class Spreadsheet(DictMixin, UserDict):
-    ...     def __init__(self, *args, **kw):
-    ...         self.data = {}
-    ...         for arg in args+(kw,): self.update(arg)
-    ...
-    ...     def __getitem__(self, key):
-    ...         return self.data[key].value
-    ...
-    ...     def __setitem__(self, key, value):
-    ...         def rule():
-    ...             print "computing", value
-    ...             return eval(value, globals(), self)
-    ...         if key in self.data:
-    ...             self.data[key].rule = rule
-    ...         else:
-    ...             self.data[key] = Cell(rule, None)
-
-    >>> ss = Spreadsheet()
-    >>> ss['a1'] ='5'
-    >>> ss['a2']='2*a1'
-    >>> ss['a3']='2*a2'
-    
-    >>> ss['a1']
-    computing 5
-    5
-    >>> ss['a2']
-    computing 2*a1
-    10
-
-    >>> ss['a1'] = '7'
-    computing 7
-    computing 2*a1
-
-    >>> ss['a1']
-    7
-    >>> ss['a2']
-    14
-    >>> ss['a3']
-    computing 2*a2
-    28
-
-    >>> ss['a1'] = '3'
-    computing 3
-    computing 2*a1
-    computing 2*a2
-
-Events::
-
-    >>> def last_ping():
-    ...     if ping.value is not None:
-    ...         print "ping", ping.value
-    ...         return ping.value
-
-    >>> last_ping = Cell(last_ping)
-    >>> ping = Cell(event=True)
-
-    >>> last_ping
-    ReadOnlyCell(<function last_ping...>, None)
-
-    >>> ping.value = 1
-    ping 1
-    >>> last_ping.value
-    1
-
-    >>> F.value = 27
-    >>> print ping.value    # event goes away as soon as something changes
-    None
-    >>> last_ping.value     # not an event, so value hangs around
-    1
-
-    >>> ping.value = 2     
-    ping 2
-    >>> last_ping.value
-    2
-    >>> ping.value = 2      # deps are recalculated even if value is same
-    ping 2
-
-    >>> F.value = 99
-    >>> print ping.value
-    None
-    >>> last_ping.value
-    2
-
-    >>> read_only_event = Cell(lambda: 1, event=True)
-    >>> read_only_event
-    ReadOnlyCell(...<lambda>..., 1, event[None])
-
-    >>> ping.value = 53
-    ping 53
-    
-    >>> read_only_event     # something changed, so value goes back to None...
-    ReadOnlyCell(...<lambda>..., None, event[None])
-
-    >>> read_only_event     # it didn't depend on anything, so it goes constant
-    Constant(None)
-
-    
--------------------
-Internals and Tests
--------------------
-
-Data Pulse Axioms
-=================
-
-Overview: updates must be synchronous (all changed values are updated at
-once), consistent (no rule sees out of date values), and minimal (only
-necessary rules run).
-
-1. Per-Cell "As Of" Value: Every value has a "current-as-of" update count, that
-is initialized with a value that is less than the global update count will ever
-be::
-
-    >>> v = Cell(value=42)
-    >>> def rule(): print "computing"; return v.value
-    >>> c = Cell(rule)
-    >>> print c._version
-    None
-
-2. Global Update Counter: There is a global update counter that is incremented
-whenever an ``Input`` value is changed.  This guarantees that there is a
-globally-consistent notion of the "time" at which updates occur::
-
-    >>> from peak.events.trellis import current_pulse
-
-    >>> start = current_pulse()
-    >>> current_pulse() - start
-    0
-
-3. Inputs Move The System Forward: When an ``Input`` changes, it increments
-the global update count and stores the new value in its own update count::
-
-    >>> i = Cell(value=22)
-    >>> current_pulse() - start
-    0
-
-    >>> print i._version
-    None
-
-    >>> i.value = 21
-    >>> i._version.number - start
-    1
-    >>> current_pulse() - start
-    1
-
-4. XXX Out-of-dateness: A value is out of date if its update count is lower than
-the update count of any of the values it depends on.
-
-5. Out-of-date Before: When a ``Value`` object's ``.value`` is queried, its
-rule is only run if the value is out of date; otherwise a cached previous value
-is returned.  This guarantees that a rule is not run unless its dependencies
-have changed since the last time the rule was run::
-
-    >>> c.value
-    computing
-    42
-
-6. Up-to-date After: Once a ``Value`` object's rule is run (or its ``.value``
-is set, if it is an ``Input``), its update count must be equal to the global
-update count.  This guarantees that a rule will not run more than once per
-update::
-
-    >>> c._version.number == current_pulse()
-    True
-
-    >>> c.value
-    42
-
-
-Dependency Management Axioms
-============================
-
-Overview: values automatically notice when other value depend on them, then
-notify them at most once if there is a change.
-
-1. Thread-local "current rule": There is a thread-local variable that always
-   contains the ``Value`` whose rule is currently being evaluated in the
-   corresponding thread.  This variable can be empty (e.g. None)::
-
-    >>> from peak.events.trellis import current_observer
-    >>> print current_observer()
-    None
-
-2. "Currentness" Maintenance: While a ``Value`` object's rule is being run, the
-   variable described in #1 must be set to point to the ``Value`` whose rule is
-   being run.  When the rule is finished, the variable must be restored to
-   whatever value it had before the rule began.  (Guarantees that values will
-   be able to tell who is using them::
-
-    >>> def rule():
-    ...     print "computing", current_observer()
-
-    >>> v = Cell(rule)
-
-    >>> print current_observer()   # between calculations
-    None
-
-    >>> v.value                 # during calculations
-    computing ReadOnlyCell(<function rule...>, None)
-
-    >>> print current_observer()   # returns to None
-    None
-
-    >>> def rule1():
-    ...     print "computing r1?", current_observer() is r1
-    ...     v = r2.value
-    ...     print "r2 value =", v
-    ...     print "computing r1?", current_observer() is r1
-
-    >>> def rule2():
-    ...     print "computing r2?", current_observer() is r2
-    ...     return 42
-
-    >>> r1, r2 = Cell(rule1), Cell(rule2)
-    >>> r1.value        # verify that this works recursively
-    computing r1? True
-    computing r2? True
-    r2 value = 42
-    computing r1? True
-
-3. Dependency Creation: When a value is read, it adds the "currently-being
-   evaluated" value as a listener that it will notify of changes::
-
-    >>> v1 = Cell(value=99)
-    >>> v2 = Cell(lambda: v1.value * 2)
-    >>> v3 = Cell(lambda: v2.value * 2)
-
-    >>> v1._listeners
-    []
-    >>> v2._listeners
-    []
-    >>> v3._listeners
-    []
-
-    >>> v2.value    # causes v1 to depend on v2
-    198
-    >>> [q().owner() for q in v1._listeners] == [v2]
-    True
-
-    >>> v2._listeners
-    []
-    >>> v3.value
-    396
-
-    >>> [q().owner() for q in v2._listeners] == [v3]
-    True
-
-4. Dependency Creation Order: New listeners are added only *after* the value
-   being read has brought itself up-to-date, and notified any *previous*
-   listeners of the change.  This ensures that the listening value does not
-   receive redundant notification if the listened-to value has to be brought
-   up-to-date first::
-
-    >>> i1 = Cell(value=1)
-    >>> r1 = Cell(lambda: i1.value)
-    >>> r2 = Cell(lambda x=[]: x or x.append(r1.value))    # one-time rule
-    >>> print r2.value
-    None
-
-    >>> [q().owner() for q in i1._listeners] == [r1]   # r1 is i1's only listener
-    True
-    >>> [q().owner() for q in r1._listeners] == [r2]   # r2 is r1's only listener
-    True
-
-    >>> def showme():
-    ...     r1.value    # r3 will be a listener of r1 now
-    ...     if [q().owner() for q in r1._listeners]==[r3]:
-    ...         print "listeners of r1==[r3]"
-    ...     elif r3 in [q().owner() for q in r1._listeners]:
-    ...         print "subscribed"
-    ...     if r1._version.number >= current_pulse(): print "r1 is up-to-date"
-    ...     if r2._version.number >= current_pulse(): print "r2 is up-to-date"
-
-    >>> r3 = Cell(showme)
-    >>> r3.value
-    subscribed
-    r1 is up-to-date
-    r2 is up-to-date
-
-    >>> i1.value = 2    # r2 will be notified and unsubscribed before listening
-    listeners of r1==[r3]
-    r1 is up-to-date
-    r2 is up-to-date
-
-    >>> i1.value = 3    # and r2 will not keep up with r1 any more
-    listeners of r1==[r3]
-    r1 is up-to-date
-
-    >>> r2
-    ReadOnlyCell(<function <lambda>...>, [1])
-
-    >>> r2        # and now it's constant
-    Constant([1])
-
-
-5. Dependency Minimalism: A listener should only be added if it is not already
-   present in the value's listener collection.  This isn't strictly
-   mandatory, the system behavior will be correct but inefficient if this
-   requirement isn't met::
-
-   >>> i1 = Cell(value=1)
-   >>> r1 = Cell(lambda: i1.value + i1.value)
-   >>> r1.value
-   2
-   >>> [q().owner() for q in i1._listeners]==[r1]
-   True
-
-6. Dependency Removal: Just before a value's rule is run, it must cease to be a
-   listener for any other values.  (Guarantees that a dependency from a
-   previous update cannot trigger an unnecessary repeated calculation.)
-
-7. Dependency Notification: Whenever a ``Value`` or ``Input`` changes, it must
-   notify all of its listeners that it has changed, in such a way that *none*
-   of the listeners are asked to recalculate their value until *all* of
-   the listeners have first been notified of the change.  (This guarantees
-   that inconsistent views cannot occur.)
-
-7a. Deferred Recalculation: The recalculation of listeners (not the
-    notification of the listeners' out-of-dateness) must be deferred if a rule
-    is currently being evaluated.  When the last rule being evaluated is
-    finished, all deferred recalculations must occur.  This guarantees that in
-    the absence of circular dependencies, no cell can ask for a value that's in
-    the process of being calculated.)
-
-8. One-Time Notification Only: A value's listeners are removed from its
-   listener collection as soon as they have been notified.  In particular, the
-   value's collection of listeners must be cleared *before* *any* of the
-   listeners are asked to recalculate themselves.  (This guarantees that
-   listeners reinstated as a side effect of recalculation will not get a
-   duplicate notification in the current update, or miss a notification in a
-   future update.)
-
-9. Conversion to Constant: If a ``Value`` object's rule is run and no
-   dependencies were created, it must become a ``Constant``, doing no further
-   listener additions or notification, once any necessary notifications to
-   existing listeners are completed.  That is, if the rule's run changed its
-   value, it must notify its existing listeners, but then the listener
-   collection must be cleared -- *again*, in addition to the clearing described
-   in #8.  (See #4 for the actual test of this.)
-
-10. No Changes During Notification: It is an error to change an ``Input`` value
-    while change notifications are taking place.
-
-11. Weak Notification: Automatically created inter-value links must not inhibit
-    garbage collection of either value::
-
-    >>> del v3
-    >>> v2._listeners
-    []
-
-    >>> del v2
-    >>> v1._listeners
-    []
-
-
-Update Algorithm
-================
-
-A value must be computed if and only if it is out of date; otherwise, it should
-just return its previous cached value.  A value is out of date if a
-value it depends on has changed since the value was last calculated.  The
-``pulse`` attribute tracks the version the value was last calculated "as of",
-and the ``needs`` attribute records the latest version of any value this value
-depends on.  If ``needs>=pulse``, the value is out of date::
-
-    >>> x = Cell(value=23)
-    >>> def rule():
-    ...     print "computing y from x"
-    ...     return x.value * 2
-    >>> y = Cell(rule)
-    >>> y.value
-    computing y from x
-    46
-
-    >>> y.value
-    46
-
-    >>> x.value = 10
-    computing y from x
-    >>> y.value
-    20
-
-    >>> x.value = 10
-    >>> y.value
-    20
-
-    >>> def rule2():
-    ...     print "computing z from y"
-    ...     return y.value - 1
-    >>> z = Cell(rule2)
-    >>> z.value
-    computing z from y
-    19
-
-    >>> x.value = 7
-    computing y from x
-    computing z from y
-
-
-When a value changes, the values that depend on it must be brought up to date.
-To ensure that no stale values can ever be seen, values must be marked
-"out of date" before any values are recomputed.  Thus, update notification
-has two phases: first, the listeners of a value are marked out-of-date, and
-only then does recomputation occur.  This breadth-first traversal ensures that
-inter-value dependencies can't cause a stale value to be seen, as might happen
-if updates were done depth-first.
-
-A value must not be marked out of date using a dependency that no longer
-exists, however.  For example, if a value C depends on values A and B, and A
-changes, then later B, the change to B should not mark C out-of-date unless
-a new dependency was set up.
-
-    >>> def C_rule():
-    ...     print "computing",
-    ...     if A.value<5:
-    ...         print A.value, B.value
-    ...     else:
-    ...         print "...done"
-
-    >>> A = Cell(value=1)
-    >>> B = Cell(value=2)
-    >>> C = Cell(C_rule)
-
-    >>> C.value
-    computing 1 2
-    >>> C.value
-
-    >>> A.value = 3
-    computing 3 2
-
-    >>> B.value = 4
-    computing 3 4
-
-    >>> A.value = 5
-    computing ...done
-
-    >>> B.value = 6     # nothing happens, since C no longer depends on B
-    >>> A.value = 3
-    computing 3 6
-
-    >>> B.value = 7     # but now it's back depending on B again.
-    computing 3 7
-
-    >>> B.value = 7
-    >>> A.value = 1
-    computing 1 7
-
-    >>> A.value = 1
-
-
-The infamous "Pentagram of Death" problem is described as follows:
-
-"""If X is an input cell, and A and B and H depend on it, and C depends on B, 
-and A depends on C, and H depends on A and C, then most algorithms will 
-fail to handle a situation where H is recalculated before C knows it's out 
-of date."""
-
-Let's try it.  Note that the order of values in the lambda expressions is
-intended to force the dependencies to be resolved in an order that ensures H
-gets told that X has changed before C does, and that C has to find out whether
-B has changed before it is allowed to be recalculated::
-
-    >>> def recalc(name):
-    ...     print "calculating", name
-
-    >>> X = Cell(value=1)
-    >>> A = Cell(lambda: recalc("A") or (X.value, C.value))
-    >>> B = Cell(lambda: recalc("B") or  X.value)
-    >>> C = Cell(lambda: recalc("C") or (B.value, X.value))
-    >>> H = Cell(lambda: recalc("H") or (X.value, C.value))
-
-We'll calculate H first, so it will be X's first listener::
-
-    >>> H.value
-    calculating H
-    calculating C
-    calculating B
-    (1, (1, 1))
-
-And then A, so it'll be the last listener::
-
-    >>> A.value
-    calculating A
-    (1, (1, 1))
-
-Now, if we change X, everyone should update in the correct order::
-
-    >>> X.value = 2
-    calculating H
-    calculating B
-    calculating C
-    calculating A
-
-    >>> H.value
-    (2, (2, 2))
-
-If this had been a shoddy algorithm, then ``H.value`` would have been
-``(2, (1, 1))`` instead, and the update order might have been different.  Note
-by the way that B is calculated before C, because C depends on B as its first
-dependency.  So it has to look "up" the dependency graph to see if B or X have
-changed before C's rule can be run.  Since B is first in C's dependency order,
-it gets recalculated first.  Had X been first in C's dependency order instead,
-the displayed calculation order would have been H, C, B, A.
-
-(Similarly, H gets recalculated before C, because its first dependency is X,
-so it immediately realizes it needs to recalculate.  X also notifies H first
-that a recalculation might be necessary.)
-
-
-Reading a value whose rule changes other values, causes the other values to
-propagate, blocking until no values are changing any more::
-
-    >>> def out():
-    ...     r = inp.value + 1
-    ...     if r<=1000:
-    ...         inp.value = r
-    ...     return r
-    >>> out = Cell(out)
-    >>> inp = Cell(value=1)
-    >>> out.value
-    1001
-    >>> inp.value
-    1000
-
-Or, here's an easier way to force a rule to repeat itself::
-
-    >>> from peak.events.trellis import repeat
-    >>> def counter():
-    ...     if counter.value == 10:
-    ...         return counter.value
-    ...     repeat()
-    ...     return counter.value + 1
-    >>> counter = Cell(counter, 1)
-    >>> counter.value
-    10
-
-(It does nothing if invoked outside of an executing rule.)
-
-
+----
 TODO
-====
+----
+
+* List and dictionary models
+
+* Time service & timestamp rules
+
+* Generator-based tasks
+
+* refresh(), volatile()
+
+* .has_listeners(), .has_dependencies(), .clear_dependencies()
+
+* IO events
+
+* Cross-thread bridge cells
+
+* signal() events
 
 * Allow custom comparison function for "changedness"
 
-* Rollback
-
-
-
-Feature Comparisons
--------------------
-
-+-----------------------------------------+---------+---------+-----------+
-| Feature                                 | Trellis | PyCells | Cellulose |
-+=========================================+=========+=========+===========+
-| Mutually-recursive/circular rules       | YES     | NO      | NO        |
-+-----------------------------------------+---------+---------+-----------+
-| Changed rules get recalculated ASAP     | YES     | NO [1]_ | ?         |
-+-----------------------------------------+---------+---------+-----------+
-| Cells can be used independently,        | YES     | NO      | YES       |
-| without attachment to an "owner" or     |         |         |           |
-| other object                            |         |         |           |
-+-----------------------------------------+---------+---------+-----------+
-| Only one constructor needed for all     | YES     | NO [2]_ | NO        |
-| cell types?                             |         |         |           |
-+-----------------------------------------+---------+---------+-----------+
-| Observers/side-effects allowed directly | YES     | NO      | ?         |
-| in rules?                               |         |         |           |
-+-----------------------------------------+---------+---------+-----------+
-| "Ephemeral" or "event" cells            | YES     | YES     | NO        |
-+-----------------------------------------+---------+---------+-----------+
-| Threading model [3]_                    | Free    | Free    | Blocking  |
-+-----------------------------------------+---------+---------+-----------+
-| Pluggable event loop support            | YES     | NO      | NO        |
-+-----------------------------------------+---------+---------+-----------+
-| Minimum memory requirement for each     | 88      | 164     | 632       |
-| cell object, not including rules or     |         |         |           |
-| contents, measured in bytes of          |         |         |           |
-| ``__basicsize__`` at initialization     |         |         |           |
-| time                                    |         |         |           |
-+-----------------------------------------+---------+---------+-----------+
-| Conflict detection/race prevention      | YES     | NO      | NO        |
-| (Ensures that multiple sets to same     |         |         |           |
-| cell within one propagation pulse       |         |         |           |
-| must match, preventing any ordering     |         |         |           |
-| dependencies from sneaking in.)         |         |         |           |
-+-----------------------------------------+---------+---------+-----------+
-| Easy construction of "model" objects    | Soon    | YES     | YES       |
-+-----------------------------------------+---------+---------+-----------+
-| Data structure types included           | Soon    | YES     | YES       |
-+-----------------------------------------+---------+---------+-----------+
-
-
-.. [1] See http://lateral.netmanagers.com.ar/weblog/2007/05/22.html for an
-       example of the problem; Trellis successfully handles this example.
-
-.. [2] PyCells has a single cell *attribute* constructor, makecell; but 
-
-.. [3] Trellis and PyCells allow threads to freely operate on *separate* sets
-       of cells without blocking -- the so-called "shared nothing" model.
-       Cellulose has locking code that allows cells to be shared between
-       threads, but even single-threaded code pays the price of locking.
-       Trellis (and in principle PyCells) can communicate between threads using
-       ``Queue.Queue`` objects to link one thread's cells to those of another.
 
 
 
