@@ -97,6 +97,15 @@ a ``Constant`` automatically after the next time it's read::
     >>> c   # The rule didn't use any other cells, so we need never recalculate
     Constant(1)
 
+Writing a new cell's value should not require a new pulse::
+
+    >>> def rule():
+    ...     c = Cell(value=99)
+    ...     c.value = 42
+    ...     return c.value
+    >>> Cell(rule).value
+    42
+
 
 Demos
 -----
@@ -281,9 +290,16 @@ the global update count and stores the new value in its own update count::
 
     >>> i.value = 21
     >>> i._version.number - start
+    0
+    >>> current_pulse() - start
+    0
+
+    >>> i.value = 21
+    >>> i._version.number - start
     1
     >>> current_pulse() - start
     1
+
 
 4. XXX Out-of-dateness: A value is out of date if its update count is lower than
 the update count of any of the values it depends on.

@@ -440,6 +440,20 @@ But not for undefined attributes::
     TypeError: Test() has no keyword argument 'qqqq'
 
 
+Creating a component from within a rule should not create a dependency link to
+the rule::
+
+    >>> x = Cell(value=27)
+    >>> class Test(Component):
+    ...     rules(x = lambda self: x.value)
+    >>> def rule():
+    ...     print "creating"
+    ...     Test()
+    >>> r = Cell(rule)
+    >>> r.value
+    creating
+    >>> x.value = 99
+
 
 
 XXX better error message for write to read-only cell

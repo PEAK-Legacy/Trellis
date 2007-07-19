@@ -8,8 +8,8 @@ import sys
 __all__ = [
     'Cell', 'Constant', 'repeat', 'rule', 'rules', 'event', 'events', 'value',
     'values', 'optional', 'cell_factory', 'cell_factories', 'Component',
+    'without_observer',
 ]
-
 _states = {}
 NO_VALUE = Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
@@ -171,7 +171,6 @@ def cleanup():
         for item in pulse.data:
             item.check_dirty(pulse)
 
-
 class Cell(ReadOnlyCell):
 
     _can_freeze = False
@@ -188,13 +187,14 @@ class Cell(ReadOnlyCell):
 
     def _set_value(self, value):
         pulse, observer, todo = self._state
-        if pulse is not self._version:
+        if pulse is not self._version and self._version is not None:
             self.check_dirty(pulse)
         old = self._writebuf
         if old is not _sentinel and old is not value and old!=value:
             raise InputConflict(old, value) # XXX
         self._writebuf = value
-        todo.data.append(self)
+        if self._version is not None: todo.data.append(self)
+        else: self.check_dirty(pulse)
         if not observer: cleanup()
 
     value = property(ReadOnlyCell.value.fget, _set_value)
@@ -349,6 +349,24 @@ def cell_factories(*modifiers, **kw):
 def values(*modifiers, **kw):
     _set_multi(sys._getframe(1), modifiers, kw, value, 'value')
 
+def initattrs(ob, cls):
+    for k, v in IsOptional(cls).iteritems():
+        if not v:
+            getattr(ob, k)
+
+def without_observer(func, *args, **kw):
+    o = _get_state()[1]
+    if o:
+        tmp, o._mailbox = o._mailbox, Mailbox(o)
+        try:
+            return func(*args, **kw)
+        finally:
+            o._mailbox = tmp
+    else:
+        return func(*args, **kw)
+
+
+
 class Component(object):
     """Base class for objects with Cell attributes"""
     __slots__ = ()
@@ -361,9 +379,32 @@ class Component(object):
                     % (cls.__name__, k)
                 )
             setattr(self, k, v)
-        for k, v in IsOptional(cls).iteritems():
-            if not v:
-                getattr(self, k)
+        without_observer(initattrs, self, cls)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
