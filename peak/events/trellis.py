@@ -172,7 +172,6 @@ def cleanup():
             item.check_dirty(pulse)
 
 class Cell(ReadOnlyCell):
-
     _can_freeze = False
     __slots__ = '_writebuf'
 
@@ -187,14 +186,15 @@ class Cell(ReadOnlyCell):
 
     def _set_value(self, value):
         pulse, observer, todo = self._state
-        if pulse is not self._version and self._version is not None:
+        if pulse is not self._version:
+            if self._version is None:
+                self._current_val = value
             self.check_dirty(pulse)
         old = self._writebuf
         if old is not _sentinel and old is not value and old!=value:
             raise InputConflict(old, value) # XXX
         self._writebuf = value
-        if self._version is not None: todo.data.append(self)
-        else: self.check_dirty(pulse)
+        todo.data.append(self)
         if not observer: cleanup()
 
     value = property(ReadOnlyCell.value.fget, _set_value)

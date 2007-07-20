@@ -290,12 +290,6 @@ the global update count and stores the new value in its own update count::
 
     >>> i.value = 21
     >>> i._version.number - start
-    0
-    >>> current_pulse() - start
-    0
-
-    >>> i.value = 21
-    >>> i._version.number - start
     1
     >>> current_pulse() - start
     1
