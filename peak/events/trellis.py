@@ -46,7 +46,7 @@ class ReadOnlyCell(object):
     """.split()
     _writebuf = _sentinel
     _can_freeze = True
-
+    writable = False
     def __init__(self, rule=None, value=None, event=False):
         self._state = _get_state()
         self._listeners = []
@@ -174,7 +174,7 @@ def cleanup():
 class Cell(ReadOnlyCell):
     _can_freeze = False
     __slots__ = '_writebuf'
-
+    writable = True
     def __new__(cls, rule=None, value=_sentinel, event=False):
         if value is _sentinel and rule is not None:
             return ReadOnlyCell(rule, None, event)
@@ -438,6 +438,8 @@ class CellProperty(object):
                 name = self.__name__
                 typ = type(ob)
                 cell =  CellFactories(typ)[name](typ, ob, name)
+                if not cell.writable:
+                    return ob.__cells__.setdefault(name, Constant(value))
                 cell = ob.__cells__.setdefault(name, cell)
             cell.value = value
 
@@ -446,6 +448,4 @@ class CellProperty(object):
 
     def __ne__(self, other):
         return type(other) is not CellProperty or other.__name__!=self.__name__
-
-
 

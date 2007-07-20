@@ -454,6 +454,16 @@ the rule::
     creating
     >>> x.value = 99
 
+And initializing a component cell that would ordinarily be read-only, should
+replace it with a constant::
+
+    >>> class Test(Component):
+    ...     rules(x = lambda self: {})
+    >>> t = Test(x=())
+    >>> t.__cells__['x']
+    Constant(())
+
+    
 
 
 XXX better error message for write to read-only cell
