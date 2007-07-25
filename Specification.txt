@@ -147,25 +147,31 @@ Circular calculations::
 
     >>> del temp
 
-Spreadsheet simulation (XXX this doesn't work in Python 2.3, which )::
+Spreadsheet simulation::
 
     >>> from UserDict import DictMixin, UserDict
+    >>> import sys
     >>> class Spreadsheet(DictMixin, UserDict):
     ...     def __init__(self, *args, **kw):
     ...         self.data = {}
     ...         for arg in args+(kw,): self.update(arg)
     ...
     ...     def __getitem__(self, key):
-    ...         return self.data[key].value
+    ...         return self.data[key][1].value
     ...
     ...     def __setitem__(self, key, value):
     ...         def rule():
+    ...             value = self.data[key][0].value
     ...             print "computing", value
-    ...             return eval(value, globals(), self)
+    ...             if sys.version>="2.4":
+    ...                 return eval(value, globals(), self)
+    ...             code = compile(value, '<string>', 'eval')
+    ...             d = dict([(k,self[k]) for k in code.co_names if k in self.data])
+    ...             return eval(code, globals(), d)
     ...         if key in self.data:
-    ...             self.data[key].rule = rule
+    ...             self.data[key][0].value = value
     ...         else:
-    ...             self.data[key] = Cell(rule, None)
+    ...             self.data[key] = Cell(value=value), Cell(rule, None)
 
     >>> ss = Spreadsheet()
     >>> ss['a1'] ='5'
@@ -202,9 +208,10 @@ Events::
     ...     if ping.value is not None:
     ...         print "ping", ping.value
     ...         return ping.value
+    ...     return last_ping.value
 
     >>> last_ping = Cell(last_ping)
-    >>> ping = Cell(event=True)
+    >>> ping = Cell(receiver=True)
 
     >>> last_ping
     ReadOnlyCell(<function last_ping...>, None)
@@ -215,9 +222,9 @@ Events::
     1
 
     >>> F.value = 27
-    >>> print ping.value    # event goes away as soon as something changes
+    >>> print ping.value    # value goes away as soon as something changes
     None
-    >>> last_ping.value     # not an event, so value hangs around
+    >>> last_ping.value
     1
 
     >>> ping.value = 2     
@@ -232,19 +239,6 @@ Events::
     None
     >>> last_ping.value
     2
-
-    >>> read_only_event = Cell(lambda: 1, event=True)
-    >>> read_only_event
-    ReadOnlyCell(...<lambda>..., 1, event[None])
-
-    >>> ping.value = 53
-    ping 53
-    
-    >>> read_only_event     # something changed, so value goes back to None...
-    ReadOnlyCell(...<lambda>..., None, event[None])
-
-    >>> read_only_event     # it didn't depend on anything, so it goes constant
-    Constant(None)
 
     
 -------------------
@@ -718,7 +712,7 @@ Feature Comparisons
 | Observers/side-effects allowed directly | YES     | NO      | ?         |
 | in rules?                               |         |         |           |
 +-----------------------------------------+---------+---------+-----------+
-| "Ephemeral" or "event" cells            | YES     | YES     | NO        |
+| "Ephemeral" or "receiver" cells         | YES     | YES     | NO        |
 +-----------------------------------------+---------+---------+-----------+
 | Threading model [3]_                    | Free    | Free    | Blocking  |
 +-----------------------------------------+---------+---------+-----------+

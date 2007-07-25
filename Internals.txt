@@ -96,16 +96,16 @@ Cell factories are inherited by subclasses::
 Class Metadata
 --------------
 
-    >>> from peak.events.trellis import CellRules, CellValues, EventFlags
-    >>> from peak.events.trellis import IsOptional, default_factory
+    >>> from peak.events.trellis import CellRules, CellValues, IsReceiver
+    >>> from peak.events.trellis import IsOptional, default_factory, NO_VALUE
     >>> from peak.events.trellis import *
 
 Setting a value in CellRules or CellValues sets the same value in CellFactories
 to default_factory::
 
-    >>> class Test:
+    >>> class Test(object):
     ...     x = rule(lambda self: 27)
-    ...     y = value(42)
+    ...     values(y = 42)
 
     >>> CellRules(Test)
     {'x': <function <lambda> at ...>}
@@ -136,47 +136,21 @@ to default_factory::
     Constant(27)
 
     
-IsOptional and EventFlags default to false for any attribute that has an
+IsOptional and IsReceiver default to false for any attribute that has an
 explicit setting defined in a given class in any other registry besides
 themselves::
 
     >>> IsOptional(Test)
     {'y': False, 'x': False}
 
-    >>> EventFlags(Test)
+    >>> IsReceiver(Test)
     {'y': False, 'x': False}
-
-Setting a CellFactory sets the rule to None, event to False, and value to
-_sentinel::
-
-    >>> class Test(object):
-    ...     cell_factories(x=lambda self: Cell(value=27))
-
-    >>> EventFlags(Test)
-    {'x': False}
-
-    >>> CellRules(Test)
-    {'x': None}
-
-    >>> CellValues(Test)
-    {'x': NO_VALUE}
-
-    >>> CellFactories(Test)
-    {'x': Factory(<function <lambda> at ...>,)}
-
-    >>> t = Test()
-    >>> t.__cells__ = {}
-
-    >>> t.x
-    27
-
-    >>> t.__cells__['x']
-    Cell(None, 27)
-
-   
+  
 The default_factory handles _sentinel values by not passing them to the Cell
 constructor::
 
+    >>> CellRules(Test)['x'] = None
+    >>> CellValues(Test)['x'] = NO_VALUE
     >>> default_factory(Test, Test(), 'x')
     Cell(None, None)
 
@@ -186,11 +160,12 @@ And it binds non-None rules to the instance::
     >>> default_factory(Test, Test(), 'x')
     ReadOnlyCell(<bound method Test.<lambda> of <Test object at...>>, 42)
     
-And uses the event flag from EventFlags::
+And uses the event flag from IsReceiver::
 
-    >>> EventFlags(Test)['x'] = True
+    >>> CellRules(Test)['x'] = None
+    >>> IsReceiver(Test)['x'] = True
     >>> default_factory(Test, Test(), 'x')
-    ReadOnlyCell(<bound method ... of <Test object at...>>, 42, event[None])
+    Cell(None, None, receiver[None])
     
 
 Decorators
@@ -202,19 +177,19 @@ Decorators
     ...     def aRule(self):
     ...         return 42
     ...     print rule(aRule)   # trick to exercise auto-name-finding
-    ...     anEvent = event(lambda:27, -1)
+    ...     anEvent = receiver(-1)
     ...     optRule = optional(lambda:99)
     CellProperty('aRule')
     
     >>> CellRules(Test)
-    {'anEvent': <function <lambda> at...>,
+    {'anEvent': None,
      'optRule': <function <lambda> at...>,
      'aRule': <function aRule at...>}
 
     >>> CellValues(Test)
     {'anEvent': -1}
 
-    >>> EventFlags(Test)
+    >>> IsReceiver(Test)
     {'anEvent': True, 'optRule': False, 'aRule': False}
 
     >>> CellFactories(Test)
@@ -224,149 +199,15 @@ Decorators
     >>> IsOptional(Test)     
     {'anEvent': False, 'optRule': True, 'aRule': False}
 
-stacking optional on a rule::
-
-    >>> class Test:
-    ...     decorate(optional, rule)
-    ...     def optRule2(self):
-    ...         return "spam"
-
-    >>> IsOptional(Test)
-    {'optRule2': True}
-
-    >>> CellRules(Test)
-    {'optRule2': <function optRule2 at...>}
-
-    >>> CellFactories(Test)
-    {'optRule2': <function default_factory at...>}
-
-    >>> EventFlags(Test)
-    {'optRule2': False}
-    
-    >>> CellValues(Test)
-    {}
-
-    >>> class Test:
-    ...     def optRule2(self):
-    ...         return "spam"
-    ...     optRule2 = optional( rule(optRule2) )
-    ...     optRule1 = optional( rule(lambda self: 99) )
-
-    >>> IsOptional(Test)
-    {'optRule2': True, 'optRule1': True}
-
-    >>> CellRules(Test)
-    {'optRule2': <function optRule2 ...>, 'optRule1': <function <lambda> ...>}
-
-    >>> CellFactories(Test)
-    {'optRule2': <function default_factory at...>,
-     'optRule1': <function default_factory at...>}
-
-    >>> EventFlags(Test)
-    {'optRule2': False, 'optRule1': False}
-
-    >>> CellValues(Test)
-    {}
-
-stacking event on a rule::
-
-    >>> class Test:
-    ...     decorate(event, rule)
-    ...     def evtRule2(self):
-    ...         return "spam"
-
-    >>> EventFlags(Test)
-    {'evtRule2': True}
-
-    >>> IsOptional(Test)
-    {'evtRule2': False}
-
-    >>> CellRules(Test)
-    {'evtRule2': <function evtRule2 at...>}
-
-    >>> CellFactories(Test)
-    {'evtRule2': <function default_factory at...>}
-
-    >>> CellValues(Test)
-    {}
-
-    >>> class Test:
-    ...     def evtRule2(self):
-    ...         return "spam"
-    ...     evtRule2 = event( rule(evtRule2) )
-    ...     evtRule1 = event( rule(lambda self: 99) )
-
-    >>> EventFlags(Test)
-    {'evtRule2': True, 'evtRule1': True}
-
-    >>> CellRules(Test)
-    {'evtRule2': <function evtRule2 ...>, 'evtRule1': <function <lambda> ...>}
-
-    >>> CellFactories(Test)
-    {'evtRule2': <function default_factory at...>,
-     'evtRule1': <function default_factory at...>}
-
-    >>> IsOptional(Test)
-    {'evtRule2': False, 'evtRule1': False}
-
-    >>> CellValues(Test)
-    {}
-
-    >>> class Test:
-    ...     def evtRule2(self):
-    ...         return "spam"
-    ...     rules(event,
-    ...         evtRule2 = evtRule2,
-    ...         evtRule1 = lambda self: 99
-    ...     )
-    ...     cell_factories(optional, foo=lambda self:Constant(42))
-    ...
-    ...     decorate(cell_factory)
-    ...     def factory(self): return Constant(81)
-
-    >>> EventFlags(Test)
-    {'evtRule2': True, 'evtRule1': True, 'factory': False, 'foo': False}
-
-    >>> CellRules(Test)
-    {'evtRule2': <function evtRule2 ...>,
-     'evtRule1': <function <lambda> ...>,
-     'factory': None, 'foo': None}
-
-    >>> CellFactories(Test)
-    {'evtRule2': <function default_factory at...>,
-     'evtRule1': <function default_factory at...>,
-     'factory': Factory(<function factory at...>,),
-     'foo': Factory(<function <lambda> at...>,)}
-
-    >>> IsOptional(Test)
-    {'evtRule2': False, 'evtRule1': False, 'factory': False, 'foo': True}
-
-    >>> CellValues(Test)
-    {'foo': NO_VALUE, 'factory': NO_VALUE}
 
 Error messages::
 
     >>> class Test:
-    ...     decorate(rule, event)
+    ...     decorate(rule, optional)
     ...     def wrong(): pass
     Traceback (most recent call last):
       ...
     TypeError: rule decorator must wrap a function directly
-
-    >>> class Test:
-    ...     decorate(cell_factory, optional)
-    ...     def wrong(): pass
-    Traceback (most recent call last):
-      ...
-    TypeError: cell_factory decorator must wrap a function directly
-
-    >>> class Test:
-    ...     decorate(value, rule)
-    ...     def wrong(): pass
-    Traceback (most recent call last):
-      ...
-    TypeError: value() must wrap a value directly
-
 
 Components
 ----------
@@ -378,19 +219,20 @@ Components
     ...     rules(
     ...         X = lambda self: self.Y + 2
     ...     )
-    ...     values(event, X = 0, Y = 0, Z = 0)
+    ...     Y = receiver(0)
+    ...     values(Z = 0)
     ...     def always(self):
     ...         print "always!"
     ...     always = rule(always)    
     ...     def only_on_request(self):
     ...         print "hello!"
     ...     only_on_request = optional(only_on_request)
-    ...     events(optional, A=lambda s:hello("A!"))
-    ...     events(B=lambda s:hello("B!"))
+    ...     A=optional(lambda s:hello("A!"))
+    ...     rules(B=lambda s:hello("B!"))
 
-    >>> EventFlags(Test)
-    {'A': True, 'B': True, 'always': False, 'only_on_request': False,
-     'Y': True, 'X': True, 'Z': True}
+    >>> IsReceiver(Test)
+    {'A': False, 'B': False, 'always': False, 'only_on_request': False,
+     'Y': True, 'X': False, 'Z': False}
 
 
 Non-optional attributes are activated at creation time, as are the appropriate
@@ -414,10 +256,20 @@ cells::
     2
     >>> t.Y = 23
     >>> t.X
-    25
+    2
     >>> t.Z = 1
     >>> t.X
-    0
+    2
+
+    >>> def show_X():
+    ...     print "X =", t.X
+    >>> show_X = Cell(show_X)
+    >>> show_X.value
+    X = 2
+
+    >>> t.Y = 23
+    X = 25
+    X = 2
 
     >>> t.__cells__.keys()
     ['A', 'B', 'always', 'only_on_request', 'Y', 'X', 'Z']    

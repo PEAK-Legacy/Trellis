@@ -6,10 +6,10 @@ from peak.util.decorators import decorate, struct, decorate_assignment
 import sys
 
 __all__ = [
-    'Cell', 'Constant', 'repeat', 'rule', 'rules', 'event', 'events', 'value',
-    'values', 'optional', 'cell_factory', 'cell_factories', 'Component',
-    'without_observer',
+    'Cell', 'Constant', 'repeat', 'rule', 'rules', 'values', 'optional',
+    'Component', 'without_observer', 'receiver',
 ]
+
 _states = {}
 NO_VALUE = Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
@@ -47,14 +47,16 @@ class ReadOnlyCell(object):
     _writebuf = _sentinel
     _can_freeze = True
     writable = False
-    def __init__(self, rule=None, value=None, event=False):
+    def __init__(self, rule=None, value=None, receiver=False):
         self._state = _get_state()
         self._listeners = []
         self._mailbox = Mailbox(self, None)
         self._changed_as_of = self._version = None
         self._current_val = value
         self._rule = rule
-        self._reset = (_sentinel, value)[bool(event)]
+        self._reset = (_sentinel, value)[bool(receiver)]
+        if receiver and rule is not None:
+            raise TypeError("Receivers can't have rules")
 
     def _get_value(self):
         pulse, observer, todo = self._state
@@ -67,7 +69,6 @@ class ReadOnlyCell(object):
                 del self._mailbox, self._listeners
                 self.__class__ = Constant
                 return self._current_val
-
         if observer is not None and observer is not self:
             mailbox = observer._mailbox
             depends = mailbox.dependencies
@@ -75,7 +76,6 @@ class ReadOnlyCell(object):
             if self not in depends: depends.append(self)
             r = ref(mailbox, listeners.remove)
             if r not in listeners: listeners.append(r)
-
         return self._current_val
 
     value = property(_get_value)
@@ -83,32 +83,33 @@ class ReadOnlyCell(object):
     def check_dirty(self, pulse):
         if pulse is self._version:
             return pulse is self._changed_as_of
-        if self._reset is not _sentinel:
-            previous = self._current_val = self._reset
-        else:
-            previous = self._current_val
+        previous = self._current_val
         self._version = pulse
-        new = self._writebuf
-        if new is not _sentinel:
-            self._writebuf = _sentinel
-        elif self._rule:
-            for d in self._mailbox.dependencies:
-                if (not d or d._changed_as_of is pulse
-                     or d._version is not pulse and d.check_dirty(pulse)
-                ):
-                    self._mailbox = Mailbox(self)  # break old dependencies
-                    tmp, old_observer, todo = state = self._state
-                    state[1] = self
-                    try:
-                        new = self._rule()
-                        break
-                    finally:
-                        state[1] = old_observer
-            else:
-                new = previous
+        if self._reset is not _sentinel and previous != self._reset:
+            new = self._reset            
         else:
-            return False
-
+            new = self._writebuf
+            if new is not _sentinel:
+                self._writebuf = _sentinel
+                if self._reset is not _sentinel:
+                    self._state[2].data.append(self)
+            elif self._rule:
+                for d in self._mailbox.dependencies:
+                    if (not d or d._changed_as_of is pulse
+                         or d._version is not pulse and d.check_dirty(pulse)
+                    ):
+                        self._mailbox = Mailbox(self)  # break old dependencies
+                        tmp, old_observer, todo = state = self._state
+                        state[1] = self
+                        try:
+                            new = self._rule()
+                            break
+                        finally:
+                            state[1] = old_observer
+                else:
+                    new = previous
+            else:
+                return False
         if new is not previous and new != previous:
             self._current_val = new
             self._changed_as_of = pulse
@@ -120,22 +121,9 @@ class ReadOnlyCell(object):
                         pulse.data.append(c)
             return True
 
-
-    def _set_rule(self, rule):
-        pulse, observer, todo = self._state
-        if pulse is not self._version:
-            self.check_dirty(pulse)
-        self._rule = rule
-        self._mailbox = Mailbox(self, None)
-        todo.data.append(self)
-        if not observer: cleanup()
-
-    rule = property(lambda s:s._rule, _set_rule)
-    del _set_rule
-
     def __repr__(self):
-        e = ('', ', event[%r]'% self._reset)[self._reset is not _sentinel]
-        return "%s(%r, %r%s)" %(self.__class__.__name__,self.rule,self.value,e)
+        e = ('', ', receiver[%r]'% self._reset)[self._reset is not _sentinel]
+        return "%s(%r, %r%s)" %(self.__class__.__name__,self._rule,self.value,e)
 
 
 class Constant(ReadOnlyCell):
@@ -160,8 +148,6 @@ class Constant(ReadOnlyCell):
         return "Constant(%r)" % (self.value,)
 
 
-
-
 def cleanup():
     pulse, observer, todo = state = _get_state()
     while todo.data:
@@ -171,17 +157,22 @@ def cleanup():
         for item in pulse.data:
             item.check_dirty(pulse)
 
+
+
+
+
+
 class Cell(ReadOnlyCell):
     _can_freeze = False
     __slots__ = '_writebuf'
     writable = True
-    def __new__(cls, rule=None, value=_sentinel, event=False):
+    def __new__(cls, rule=None, value=_sentinel, receiver=False):
         if value is _sentinel and rule is not None:
-            return ReadOnlyCell(rule, None, event)
-        return ReadOnlyCell.__new__(cls, rule, value, event)
+            return ReadOnlyCell(rule, None, receiver)
+        return ReadOnlyCell.__new__(cls, rule, value, receiver)
 
-    def __init__(self, rule=None, value=None, event=False):
-        ReadOnlyCell.__init__(self, rule, value, event)
+    def __init__(self, rule=None, value=None, receiver=False):
+        ReadOnlyCell.__init__(self, rule, value, receiver)
         self._writebuf = _sentinel
 
     def _set_value(self, value):
@@ -202,6 +193,15 @@ class Cell(ReadOnlyCell):
 
 def current_pulse():    return _get_state()[0].number
 def current_observer(): return _get_state()[1]
+
+
+
+
+
+
+
+
+
 
 class CellValues(Registry):
     """Registry for cell values"""
@@ -225,24 +225,24 @@ class CellFactories(_Defaulting):
 class IsOptional(_Defaulting):
     """Registry for flagging that an attribute need not be activated"""
 
-class EventFlags(_Defaulting):
+class IsReceiver(_Defaulting):
     """Registry for flagging that a cell is an event"""
 
 def default_factory(typ, ob, name):
     """Default factory for making cells"""
     rule = CellRules(typ).get(name)
     value = CellValues(typ).get(name, _sentinel)
-    event = EventFlags(typ).get(name, False)
     if rule is not None:
         rule = rule.__get__(ob, typ)
     if value is _sentinel:
-        return Cell(rule, event=event)
-    return Cell(rule, value, event)
+        return Cell(rule, receiver=IsReceiver(typ).get(name, False))
+    return Cell(rule, value, IsReceiver(typ).get(name, False))
 
 class Cells(Role):
     __slots__ = ()
     role_key = classmethod(lambda cls: '__cells__')
     def __new__(cls, subject): return {}
+
 
 def _invoke_callback(
     extras, func=_sentinel, value=_sentinel, __frame=None, __name=None
@@ -262,7 +262,7 @@ def _invoke_callback(
     def callback(frame, name, func, locals):
         for role, value in items:
             role.for_frame(frame).set(name, value)
-        EventFlags.for_frame(frame).defaults[name] = False
+        IsReceiver.for_frame(frame).defaults[name] = False
         IsOptional.for_frame(frame).defaults[name] = False
         CellFactories.for_frame(frame).defaults[name] = default_factory
         return CellProperty(name)
@@ -273,28 +273,17 @@ def _invoke_callback(
         decorate_assignment(callback, frame=frame)
         return _sentinel
 
-def optional(func=_sentinel, value=_sentinel, **kw):
-    if '__modifier' in kw:
-        IsOptional.for_frame(kw['__frame']).set(kw['__name'], True)
-        return CellProperty(kw['__name'])
-    elif isinstance(func, CellProperty):
-        IsOptional.for_enclosing_class().set(func.__name__, True)
-        return func
-    else:
-        return _invoke_callback([(IsOptional, True)], func, value, **kw)
+def optional(func):
+    return _invoke_callback([(IsOptional, True)], func)
+
+def receiver(value=_sentinel):
+    items = [(IsReceiver, True), (CellFactories, default_factory)]
+    return _invoke_callback(items, None, value)
 
 
 
-def event(func=None, value=_sentinel, **kw):
-    if '__modifier' in kw:
-        EventFlags.for_frame(kw['__frame']).set(kw['__name'], True)
-        return CellProperty(kw['__name'])
-    elif isinstance(func, CellProperty):
-        EventFlags.for_enclosing_class().set(func.__name__, True)
-        return func
-    else:
-        items = [(EventFlags, True), (CellFactories, default_factory)]
-        return _invoke_callback(items, func, value, **kw)
+
+
 
 def rule(func, **kw):
     if isinstance(func, CellProperty):
@@ -303,51 +292,20 @@ def rule(func, **kw):
         items = [(CellRules, func), (CellFactories, default_factory)]
         return _invoke_callback(items, func, **kw)
 
-def cell_factory(func, **kw):
-    if isinstance(func, CellProperty):
-        raise TypeError("cell_factory decorator must wrap a function directly")
-    else:
-        items = [
-            (CellFactories, Factory(func)), (CellValues, _sentinel),
-            (EventFlags, False)
-        ]
-        if func.__name__ !='<lambda>': kw.setdefault('__name', func.__name__)
-        return _invoke_callback(items, None, **kw)
+def _value(value, **kw):
+    items = [(CellFactories, default_factory)]
+    return _invoke_callback(items, value=value, **kw)
 
-def value(value, **kw):
-    if isinstance(value, CellProperty):
-        raise TypeError("value() must wrap a value directly")
-    else:
-        items = [(CellFactories, default_factory)]
-        return _invoke_callback(items, value=value, **kw)
-
-
-
-
-
-
-struct(__call__ = lambda self, typ, ob, name: self.func(ob))
-def Factory(func):
-    return func,
-
-def _set_multi(frame, modifiers, kw, wrap, arg='func'):
+def _set_multi(frame, kw, wrap, arg='func'):
     for k, v in kw.items():
         v = wrap(__name=k, __frame=frame, **{arg:v})
         frame.f_locals.setdefault(k, v)
-        for m in modifiers:
-            v = m(__name=k, __frame=frame, __modifier=True, **{arg:v})
 
-def rules(*modifiers, **kw):
-    _set_multi(sys._getframe(1), modifiers, kw, rule)
+def rules(**kw):
+    _set_multi(sys._getframe(1), kw, rule)
 
-def events(*modifiers, **kw):
-    _set_multi(sys._getframe(1), modifiers, kw, event)
-
-def cell_factories(*modifiers, **kw):
-    _set_multi(sys._getframe(1), modifiers, kw, cell_factory)
-
-def values(*modifiers, **kw):
-    _set_multi(sys._getframe(1), modifiers, kw, value, 'value')
+def values(**kw):
+    _set_multi(sys._getframe(1), kw, _value, 'value')
 
 def initattrs(ob, cls):
     for k, v in IsOptional(cls).iteritems():
@@ -364,6 +322,7 @@ def without_observer(func, *args, **kw):
             o._mailbox = tmp
     else:
         return func(*args, **kw)
+
 
 
 
