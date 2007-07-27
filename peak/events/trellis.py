@@ -58,36 +58,41 @@ class ReadOnlyCell(object):
         if receiver and rule is not None:
             raise TypeError("Receivers can't have rules")
 
-    def _get_value(self):
+    def get_value(self):
         pulse, observer, todo = state = self._state
-        if pulse is not self._version:
-            self.check_dirty(state)
-            if observer is None: _cleanup(state)
-            if not self._mailbox.dependencies and self._can_freeze and (self._reset
-                is _sentinel or self._changed_as_of is not pulse
-            ):
-                del self._mailbox, self._listeners
-                self.__class__ = Constant
-                return self._current_val
-        if observer is not None and observer is not self:
+        if observer is None:
+            # XXX we should switch to current state here, if needed
+            if pulse is not self._version:
+                self.check_dirty(state)
+                _cleanup(state)
+            return self._current_val
+        elif observer is not self:
+            #if observer._state is not state:
+            #    raise RuntimeError("Can't access cells in another task/thread")
             mailbox = observer._mailbox
             depends = mailbox.dependencies
             listeners = self._listeners
             if self not in depends: depends.append(self)
             r = ref(mailbox, listeners.remove)
             if r not in listeners: listeners.append(r)
+        if pulse is not self._version:
+            self.check_dirty(state)
         return self._current_val
 
-    value = property(_get_value)
+        
+    value = property(get_value)
 
     def check_dirty(self, state):
         pulse, observer, todo = state
         if pulse is self._version:
             return pulse is self._changed_as_of
+
         previous = self._current_val
         self._version = pulse
+        freeze = False
+
         if self._reset is not _sentinel and previous != self._reset:
-            new = self._reset            
+            new = self._reset
         else:
             new = self._writebuf
             if new is not _sentinel:
@@ -99,31 +104,62 @@ class ReadOnlyCell(object):
                     if (not d or d._changed_as_of is pulse
                          or d._version is not pulse and d.check_dirty(state)
                     ):
-                        self._mailbox = Mailbox(self)  # break old dependencies
+                        self._mailbox = m = Mailbox(self)  # break old deps
                         state[1] = self
                         try:
                             new = self._rule()
+                            freeze = not m.dependencies and self._can_freeze
                             break
                         finally:
                             state[1] = observer
                 else:
-                    new = previous
+                    return False
             else:
                 return False
+
         if new is not previous and new != previous:
             self._current_val = new
             self._changed_as_of = pulse
+            
             for c in self._listeners:
                 c = c()
                 if c is not None:
                     c = c.owner()
                     if c is not None and c._version is not pulse:
                         pulse.data.append(c)
+            if freeze:
+                del self._mailbox, self._listeners
+                self.__class__ = Constant
             return True
+
+        elif freeze:
+            del self._mailbox, self._listeners
+            self.__class__ = Constant
 
     def __repr__(self):
         e = ('', ', receiver[%r]'% self._reset)[self._reset is not _sentinel]
         return "%s(%r, %r%s)" %(self.__class__.__name__,self._rule,self.value,e)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class Constant(ReadOnlyCell):
@@ -131,7 +167,8 @@ class Constant(ReadOnlyCell):
 
     __slots__ = ()
     value = ReadOnlyCell._current_val
-
+    get_value = lambda self: self.value
+    
     _can_freeze = False
     _mailbox = None
 
@@ -162,10 +199,16 @@ def _cleanup(state):
 
 
 
+
+
+
+
 class Cell(ReadOnlyCell):
+
     _can_freeze = False
     __slots__ = '_writebuf'
     writable = True
+
     def __new__(cls, rule=None, value=_sentinel, receiver=False):
         if value is _sentinel and rule is not None:
             return ReadOnlyCell(rule, None, receiver)
@@ -175,8 +218,12 @@ class Cell(ReadOnlyCell):
         ReadOnlyCell.__init__(self, rule, value, receiver)
         self._writebuf = _sentinel
 
-    def _set_value(self, value):
+    def set_value(self, value):
         pulse, observer, todo = state = self._state
+        #if observer is None:
+        #    XXX we should switch to current state here, if needed
+        #elif observer._state is not state:
+        #    raise RuntimeError("Can't access cells in another task/thread")
         if pulse is not self._version:
             if self._version is None:
                 self._current_val = value
@@ -186,20 +233,14 @@ class Cell(ReadOnlyCell):
             raise InputConflict(old, value) # XXX
         self._writebuf = value
         todo.data.append(self)
-        if not observer: _cleanup(state)
+        if not observer:
+            _cleanup(state)
 
-    value = property(ReadOnlyCell.value.fget, _set_value)
-    del _set_value
+    value = property(ReadOnlyCell.get_value, set_value)
+
 
 def current_pulse():    return _get_state()[0].number
 def current_observer(): return _get_state()[1]
-
-
-
-
-
-
-
 
 
 
@@ -268,7 +309,7 @@ def _invoke_callback(
         return CellProperty(name)
 
     if name:
-        return callback(frame, name, func, None)        
+        return callback(frame, name, func, None)
     else:
         decorate_assignment(callback, frame=frame)
         return _sentinel

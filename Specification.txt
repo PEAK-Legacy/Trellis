@@ -432,9 +432,6 @@ notify them at most once if there is a change.
     listeners of r1==[r3]
     r1 is up-to-date
 
-    >>> r2
-    ReadOnlyCell(<function <lambda>...>, [1])
-
     >>> r2        # and now it's constant
     Constant([1])
 

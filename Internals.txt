@@ -315,11 +315,38 @@ replace it with a constant::
     >>> t.__cells__['x']
     Constant(())
 
-    
-
-
 XXX better error message for write to read-only cell
 
 
+Cell Objects
+------------
 
+get_value/set_value methods::
+
+    >>> c = Cell()
+    >>> print c.get_value()
+    None
+    >>> c.set_value(42)
+    >>> c.value
+    42
+    >>> c1 = Constant(42)
+    >>> c1.get_value()
+    42
+    >>> c1.set_value(99)
+    Traceback (most recent call last):
+      ...
+    AttributeError: 'Constant' object has no attribute 'set_value'
+
+    >>> c1 = Cell(lambda: c.value)
+    >>> c1.get_value()
+    42
+    >>> c1.set_value(99)
+    Traceback (most recent call last):
+      ...
+    AttributeError: 'ReadOnlyCell' object has no attribute 'set_value'
+
+    >>> c.set_value(99)
+    >>> c1.get_value()
+    99
+    
 
