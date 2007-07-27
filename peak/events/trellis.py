@@ -519,10 +519,10 @@ def todo_factory(typ, ob, name):
     return Cell(None, rule(), True)
 
 def modifier(method):
-    """Mark a method as performing operations in the future"""
+    """Mark a method as performing modifications to Trellis data"""
     def decorated(*args, **kw):
         pulse, observer, todo = state = _get_state()
-        state[1] = Cell()
+        state[1] = observer or Cell()
         try:
             return method(*args, **kw)
         finally:        
