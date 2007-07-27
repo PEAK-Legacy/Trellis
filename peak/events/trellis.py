@@ -59,10 +59,10 @@ class ReadOnlyCell(object):
             raise TypeError("Receivers can't have rules")
 
     def _get_value(self):
-        pulse, observer, todo = self._state
+        pulse, observer, todo = state = self._state
         if pulse is not self._version:
-            self.check_dirty(pulse)
-            if observer is None: cleanup()
+            self.check_dirty(state)
+            if observer is None: _cleanup(state)
             if not self._mailbox.dependencies and self._can_freeze and (self._reset
                 is _sentinel or self._changed_as_of is not pulse
             ):
@@ -80,7 +80,8 @@ class ReadOnlyCell(object):
 
     value = property(_get_value)
 
-    def check_dirty(self, pulse):
+    def check_dirty(self, state):
+        pulse, observer, todo = state
         if pulse is self._version:
             return pulse is self._changed_as_of
         previous = self._current_val
@@ -92,20 +93,19 @@ class ReadOnlyCell(object):
             if new is not _sentinel:
                 self._writebuf = _sentinel
                 if self._reset is not _sentinel:
-                    self._state[2].data.append(self)
+                    todo.data.append(self)
             elif self._rule:
                 for d in self._mailbox.dependencies:
                     if (not d or d._changed_as_of is pulse
-                         or d._version is not pulse and d.check_dirty(pulse)
+                         or d._version is not pulse and d.check_dirty(state)
                     ):
                         self._mailbox = Mailbox(self)  # break old dependencies
-                        tmp, old_observer, todo = state = self._state
                         state[1] = self
                         try:
                             new = self._rule()
                             break
                         finally:
-                            state[1] = old_observer
+                            state[1] = observer
                 else:
                     new = previous
             else:
@@ -141,22 +141,22 @@ class Constant(ReadOnlyCell):
     def __setattr__(self, name, value):
         raise AttributeError("Constants can't be changed")
 
-    def check_dirty(self, pulse):
+    def check_dirty(self, state):
         return False
 
     def __repr__(self):
         return "Constant(%r)" % (self.value,)
 
 
-def cleanup():
-    pulse, observer, todo = state = _get_state()
+def _cleanup(state):
+    pulse, observer, todo = state
     while todo.data:
         pulse.data = None   # don't keep a list around any longer
         pulse = state[0] = todo
         todo = state[2] = Pulse(pulse.number+1)
         for item in pulse.data:
-            item.check_dirty(pulse)
-
+            item.check_dirty(state)
+        del pulse.data[:]   # avoid re-looping
 
 
 
@@ -176,17 +176,17 @@ class Cell(ReadOnlyCell):
         self._writebuf = _sentinel
 
     def _set_value(self, value):
-        pulse, observer, todo = self._state
+        pulse, observer, todo = state = self._state
         if pulse is not self._version:
             if self._version is None:
                 self._current_val = value
-            self.check_dirty(pulse)
+            self.check_dirty(state)
         old = self._writebuf
         if old is not _sentinel and old is not value and old!=value:
             raise InputConflict(old, value) # XXX
         self._writebuf = value
         todo.data.append(self)
-        if not observer: cleanup()
+        if not observer: _cleanup(state)
 
     value = property(ReadOnlyCell.value.fget, _set_value)
     del _set_value
