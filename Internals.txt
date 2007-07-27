@@ -350,3 +350,101 @@ get_value/set_value methods::
     99
     
 
+Repeating, Polling, Recalc
+--------------------------
+
+    >>> poll()
+    Traceback (most recent call last):
+      ...
+    RuntimeError: poll() must be called from a rule
+
+    >>> repeat()
+    Traceback (most recent call last):
+      ...
+    RuntimeError: repeat() must be called from a rule
+
+    >>> c = Cell(value=99)
+    >>> c.ensure_recalculation()
+    Traceback (most recent call last):
+      ...
+    TypeError: Can't recalculate a cell without a rule
+
+    >>> def hello(): print "c =", c.value
+    >>> c1 = Cell(hello)
+    
+    >>> Cell(c1.ensure_recalculation).value
+    c = 99
+
+    >>> c.value = 42
+    c = 42
+
+    >>> Cell().value = 76
+    >>> c1.ensure_recalculation()
+    >>> Cell().value
+    c = 42
+
+    >>> Cell().value = 69
+    >>> c1.ensure_recalculation()
+    >>> Cell().value
+    c = 42
+
+    >>> c1.value
+    >>> c1.ensure_recalculation()
+    Traceback (most recent call last):
+      ...
+    RuntimeError: Already recalculated
+  
+    >>> Cell().value = 1    # already calculated, no effect
+
+    >>> c1.ensure_recalculation()
+    >>> Cell().value
+    c = 42
+
+"Poll" re-invokes a rule on the next recalc of *anything*::
+
+    >>> Cell().value = 21
+    >>> c1.ensure_recalculation()
+
+    >>> def count():
+    ...     if poll(): print "calculating"
+    ...     return c.value+1
+
+    >>> c = Cell(count, 0)
+    >>> c.value
+    calculating
+    c = 1
+    1
+    >>> c.value
+    1
+
+    >>> Cell().value = 16
+    calculating
+    c = 2
+    
+    >>> Cell().value = 7
+    calculating
+    c = 3
+
+    >>> Cell().value = 66
+    calculating
+    c = 4
+
+
+At least, until/unless you get rid of the cell::
+
+    >>> c = Cell(value=99)
+    >>> c.value
+    99
+
+Which of course requires that its listeners drop their references first::
+
+    >>> Cell().value = 27
+    calculating
+    c = 99
+
+And now the repeated polling of the now-vanished cell stops::
+
+    >>> Cell().value = 66
+    >>> c.value = 20
+    c = 20    
+

@@ -6,38 +6,38 @@ from peak.util.decorators import decorate, struct, decorate_assignment
 import sys
 
 __all__ = [
-    'Cell', 'Constant', 'repeat', 'rule', 'rules', 'values', 'optional',
-    'Component', 'without_observer', 'receiver', 'InputConflict'
+    'Cell', 'Constant', 'rule', 'rules', 'values', 'optional',
+    'Component', 'without_observer', 'receiver', 'InputConflict',
+    'repeat', 'poll',
 ]
 
 _states = {}
 NO_VALUE = Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
 
-def repeat():
-    """Schedule the current rule to be run again, repeatedly"""
-    pulse, observer, todo = _get_state()
-    observer._mailbox.dependencies.insert(0, None)   # mark calling rule for recalc
-    todo.data.append(observer)          # and schedule it for the next pulse
-    return True
-
 def _get_state():
     tid = get_ident()
     if tid not in _states:
-        _states[tid] = [Pulse(1), None, Pulse(2)]
+        _states[tid] = state = [Pulse(1), None, Pulse(2)]
+        state[0].cell = state[2].cell = Cell(current_pulse, 1)
     return _states[tid]
 
 class Pulse(object):
-    __slots__ = 'data', 'number'
-    def __init__(self, number):
+    __slots__ = 'data', 'number', 'cell'
+    def __init__(self, number, cell=None):
         self.data = []
         self.number = number
+        self.cell = cell
 
 class Mailbox(object):
     __slots__ = '__weakref__', 'owner', 'dependencies'
     def __init__(self, owner, *args):
         self.owner = ref(owner)
         self.dependencies = list(args)
+
+
+
+
 
 class ReadOnlyCell(object):
     __slots__ = """
@@ -128,35 +128,37 @@ class ReadOnlyCell(object):
                     if c is not None and c._version is not pulse:
                         pulse.data.append(c)
             if freeze:
-                del self._mailbox, self._listeners
+                self._mailbox = self._listeners = None
                 self.__class__ = Constant
             return True
 
         elif freeze:
-            del self._mailbox, self._listeners
+            self._mailbox = self._listeners = None
             self.__class__ = Constant
 
     def __repr__(self):
         e = ('', ', receiver[%r]'% self._reset)[self._reset is not _sentinel]
         return "%s(%r, %r%s)" %(self.__class__.__name__,self._rule,self.value,e)
 
+    def ensure_recalculation(self):
+        """Ensure that this cell's rule will be (re)calculated"""
+        pulse, observer, todo = self._state
+        if observer is self:  # repeat()
+            self._mailbox.dependencies.insert(0, None)
+            todo.data.append(self)
+        elif self._rule is None:
+            raise TypeError("Can't recalculate a cell without a rule")
+        #elif observer and observer._state is not self._state:
+        #    raise RuntimeError("Can't access cells in another task/thread")
+        elif pulse is self._version:
+            raise RuntimeError("Already recalculated")
+        else:  
+            self._mailbox.dependencies.append(None)
+            pulse.data.append(self)
+
 
 class InputConflict(Exception):
     """Attempt to set a rule that causes a visible conflict in the state"""
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -184,22 +186,22 @@ class Constant(ReadOnlyCell):
     def __repr__(self):
         return "Constant(%r)" % (self.value,)
 
-
 def _cleanup(state):
     pulse, observer, todo = state
-    while todo.data:
+    while 1:
+        if pulse.data:
+            for item in pulse.data:
+                item.check_dirty(state)
+            del pulse.data[:]
+
+        if not todo.data:
+            return    # no changes, stay in the current pulse
+
+        # Begin a new pulse
         pulse.data = None   # don't keep a list around any longer
         pulse = state[0] = todo
-        todo = state[2] = Pulse(pulse.number+1)
-        for item in pulse.data:
-            item.check_dirty(state)
-        del pulse.data[:]   # avoid re-looping
-
-
-
-
-
-
+        todo = state[2] = Pulse(pulse.number+1, pulse.cell)
+        pulse.cell.ensure_recalculation()
 
 
 
@@ -382,21 +384,21 @@ class Component(object):
         without_observer(initattrs, self, cls)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def repeat():
+    """Schedule the current rule to be run again, repeatedly"""
+    observer = current_observer()
+    if observer:
+        observer.ensure_recalculation()
+    else:
+        raise RuntimeError("repeat() must be called from a rule")
+    
+def poll():
+    """Schedule the current rule to be run again, repeatedly"""
+    pulse, observer, todo = _get_state()
+    if observer:
+        return pulse.cell.value
+    else:
+        raise RuntimeError("poll() must be called from a rule")
 
 
 
