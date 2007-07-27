@@ -93,6 +93,44 @@ Cell factories are inherited by subclasses::
     27
 
 
+TodoProperty
+------------
+
+TodoProperty objects are like CellProperty, but offer an extra ``future``
+attribute::
+
+    >>> from peak.events.trellis import TodoProperty, todo_factory
+    
+    >>> class X(object):
+    ...     x = TodoProperty('x')
+    ...     future_x = x.future
+    >>> help(X)
+    Help on class X in module __builtin__:
+    <BLANKLINE>
+    class X(object)
+     |  ...
+     |  future_x
+     |      The future value of the 'x' attribute...
+     |  x...
+     |      Property representing a ``todo`` attribute
+    <BLANKLINE>
+
+
+    >>> TodoProperty('x')==TodoProperty('y')
+    False
+    >>> TodoProperty('x')==CellProperty('x')
+    False
+    >>> TodoProperty('x')!=TodoProperty('x')
+    False
+
+    >>> TodoProperty('x')==TodoProperty('x')
+    True
+    >>> TodoProperty('x')!=TodoProperty('y')
+    True
+    >>> TodoProperty('x')!=CellProperty('x')
+    True
+    
+
 Class Metadata
 --------------
 
@@ -166,6 +204,61 @@ And uses the event flag from IsReceiver::
     >>> IsReceiver(Test)['x'] = True
     >>> default_factory(Test, Test(), 'x')
     Cell(None, None, receiver[None])
+
+The todo_factory only uses the rule to create the default value, and always
+creates a rule-free receiver, regardless of the value or receiver flag
+settings::
+
+    >>> CellRules(Test)['x'] = lambda self: dict()
+    >>> CellValues(Test)['x'] = 54
+    >>> IsReceiver(Test)['x'] = False
+
+    >>> Test.x = TodoProperty('x')
+    >>> Test.to_x = Test.x.future
+
+    >>> todo_factory(Test, Test(), 'x')
+    Cell(None, {}, receiver[{}])
+
+
+future, @modifier, etc.
+-----------------------
+
+    >>> t = Test()
+    >>> t.__cells__ = {}
+
+    >>> def dump(): print "t.x =", t.x
+
+    >>> watcher = Cell(dump)
+    >>> watcher.value
+    t.x = {}
+
+    >>> t.to_x
+    Traceback (most recent call last):
+      ...
+    RuntimeError: future can only be accessed from a @modifier
+    
+    >>> def add(key, val):
+    ...     t.to_x[key] = val
+    >>> add = modifier(add)
+
+    >>> add(1, 2)
+    t.x = {1: 2}
+    
+    >>> def update(**kw):
+    ...     for k, v in kw.items():
+    ...         add(k, v)
+
+    >>> update(x=1, y=2)
+    t.x = {'y': 2}
+    t.x = {'x': 1}
+
+    >>> update = modifier(update)
+
+    >>> update(x=1, y=2)    # it all happens in one go
+    t.x = {'y': 2, 'x': 1}
+
+
+
     
 
 Decorators
@@ -176,28 +269,58 @@ Decorators
     >>> class Test:
     ...     def aRule(self):
     ...         return 42
-    ...     print rule(aRule)   # trick to exercise auto-name-finding
+    ...     r = rule(aRule)   # trick to exercise auto-name-finding
     ...     anEvent = receiver(-1)
     ...     optRule = optional(lambda:99)
+    ...     todo = todo(lambda self:{})
+
+    >>> Test.r
     CellProperty('aRule')
+
+    >>> Test.todo
+    TodoProperty('todo')
     
     >>> CellRules(Test)
     {'anEvent': None,
      'optRule': <function <lambda> at...>,
-     'aRule': <function aRule at...>}
+     'aRule': <function aRule at...>, 'todo': <function <lambda> at ...>}
 
     >>> CellValues(Test)
-    {'anEvent': -1}
+    {'anEvent': -1, 'todo': None}
 
     >>> IsReceiver(Test)
-    {'anEvent': True, 'optRule': False, 'aRule': False}
+    {'anEvent': True, 'optRule': False, 'aRule': False, 'todo': True}
 
     >>> CellFactories(Test)
     {'anEvent': <function default_factory...>,
-     'aRule': <function default_factory...>}
+     'aRule': <function default_factory...>,
+     'todo': <function todo_factory...>}
 
     >>> IsOptional(Test)     
-    {'anEvent': False, 'optRule': True, 'aRule': False}
+    {'anEvent': False, 'optRule': True, 'aRule': False, 'todo': False}
+
+
+    >>> class Test(object):
+    ...     todos(
+    ...         added   = lambda self:{},
+    ...         removed = lambda self:set()
+    ...     )
+    ...     to_add = added.future
+    ...     to_remove = removed.future
+
+    >>> CellRules(Test)
+    {'removed': <function <lambda> at...>,
+     'added': <function <lambda> at ...>}
+
+    >>> CellValues(Test)
+    {'removed': None, 'added': None}
+
+    >>> IsReceiver(Test)
+    {'removed': True, 'added': True}
+
+    >>> CellFactories(Test)
+    {'removed': <function todo_factory...>,
+     'added': <function todo_factory...>}
 
 
 Error messages::
@@ -207,7 +330,15 @@ Error messages::
     ...     def wrong(): pass
     Traceback (most recent call last):
       ...
-    TypeError: rule decorator must wrap a function directly
+    TypeError: @rule decorator must wrap a function directly
+
+    >>> class Test:
+    ...     decorate(todo, optional)
+    ...     def wrong(): pass
+    Traceback (most recent call last):
+      ...
+    TypeError: @todo decorator must wrap a function directly
+
 
 Components
 ----------
@@ -219,8 +350,8 @@ Components
     ...     rules(
     ...         X = lambda self: self.Y + 2
     ...     )
-    ...     Y = receiver(0)
-    ...     values(Z = 0)
+    ...     receivers(Y = 0)
+    ...     Z = value(0)
     ...     def always(self):
     ...         print "always!"
     ...     always = rule(always)    
@@ -229,6 +360,7 @@ Components
     ...     only_on_request = optional(only_on_request)
     ...     A=optional(lambda s:hello("A!"))
     ...     rules(B=lambda s:hello("B!"))
+    
 
     >>> IsReceiver(Test)
     {'A': False, 'B': False, 'always': False, 'only_on_request': False,

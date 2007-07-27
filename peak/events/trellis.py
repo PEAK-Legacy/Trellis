@@ -2,13 +2,13 @@ from thread import get_ident
 from peak.util.symbols import Symbol
 from weakref import ref
 from peak.util.roles import Role, Registry
-from peak.util.decorators import decorate, struct, decorate_assignment
+from peak.util.decorators import decorate, struct, decorate_assignment, rewrap
 import sys
 
 __all__ = [
-    'Cell', 'Constant', 'rule', 'rules', 'values', 'optional',
-    'Component', 'without_observer', 'receiver', 'InputConflict',
-    'repeat', 'poll',
+    'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
+    'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
+    'repeat', 'poll', 'without_observer', 'InputConflict', 
 ]
 
 _states = {}
@@ -158,9 +158,7 @@ class ReadOnlyCell(object):
 
 
 class InputConflict(Exception):
-    """Attempt to set a rule that causes a visible conflict in the state"""
-
-
+    """Attempt to set a cell to two different values during the same pulse"""
 
 
 
@@ -187,8 +185,8 @@ class Constant(ReadOnlyCell):
         return "Constant(%r)" % (self.value,)
 
 def _cleanup(state):
-    pulse, observer, todo = state
-    while 1:
+    pulse, observer, todo = state #= state or _get_state()
+    while observer is None:
         if pulse.data:
             for item in pulse.data:
                 item.check_dirty(state)
@@ -287,53 +285,20 @@ class Cells(Role):
     def __new__(cls, subject): return {}
 
 
-def _invoke_callback(
-    extras, func=_sentinel, value=_sentinel, __frame=None, __name=None
-):
-    frame = __frame or sys._getframe(2)
-    name  = __name
-    items = list(extras)
+def rule(func):
+    """Define a rule cell attribute"""
+    return _rule(func, __frame=sys._getframe(1))
 
-    if func is not _sentinel:
-        items.append((CellRules, func))
-        if func is not None and func.__name__!='<lambda>':
-            name = name or func.__name__
-
-    if value is not _sentinel:
-        items.append((CellValues, value))
-
-    def callback(frame, name, func, locals):
-        for role, value in items:
-            role.for_frame(frame).set(name, value)
-        IsReceiver.for_frame(frame).defaults[name] = False
-        IsOptional.for_frame(frame).defaults[name] = False
-        CellFactories.for_frame(frame).defaults[name] = default_factory
-        return CellProperty(name)
-
-    if name:
-        return callback(frame, name, func, None)
-    else:
-        decorate_assignment(callback, frame=frame)
-        return _sentinel
-
-def optional(func):
-    return _invoke_callback([(IsOptional, True)], func)
-
-def receiver(value=_sentinel):
-    items = [(IsReceiver, True), (CellFactories, default_factory)]
-    return _invoke_callback(items, None, value)
-
-
-
-
-
-
-def rule(func, **kw):
+def _rule(func, **kw):
     if isinstance(func, CellProperty):
-        raise TypeError("rule decorator must wrap a function directly")
+        raise TypeError("@rule decorator must wrap a function directly")
     else:
         items = [(CellRules, func), (CellFactories, default_factory)]
         return _invoke_callback(items, func, **kw)
+
+def value(value):
+    """Define a value cell attribute"""
+    return _value(value, __frame=sys._getframe(1))
 
 def _value(value, **kw):
     items = [(CellFactories, default_factory)]
@@ -344,29 +309,62 @@ def _set_multi(frame, kw, wrap, arg='func'):
         v = wrap(__name=k, __frame=frame, **{arg:v})
         frame.f_locals.setdefault(k, v)
 
-def rules(**kw):
-    _set_multi(sys._getframe(1), kw, rule)
+def rules(**attrs):
+    """Define multiple rule-cell attributes"""
+    _set_multi(sys._getframe(1), attrs, _rule)
 
-def values(**kw):
-    _set_multi(sys._getframe(1), kw, _value, 'value')
+def values(**attrs):
+    """Define multiple value-cell attributes"""
+    _set_multi(sys._getframe(1), attrs, _value, 'value')
+
+def receivers(**attrs):
+    """Define multiple receiver-cell attributes"""
+    _set_multi(sys._getframe(1), attrs, _receiver, 'value')
+
+def todos(**attrs):
+    """Define multiple todo-cell attributes"""
+    _set_multi(sys._getframe(1), attrs, _todo)
+
+
+def optional(func):
+    """Define a rule-cell attribute that's not automatically activated"""
+    return _invoke_callback([(IsOptional, True)], func)
+
+def receiver(value):
+    """Define a receiver-cell attribute"""
+    return _receiver(value, __frame=sys._getframe(1))
+
+def _receiver(value, **kw):
+    items = [(IsReceiver, True), (CellFactories, default_factory)]
+    return _invoke_callback(items, None, value, **kw)
+
+def todo(func):
+    """Define an attribute that can send "messages to the future" """
+    return _todo(func, __frame=sys._getframe(1))
+
+def _todo(func, **kw):
+    if isinstance(func, CellProperty):
+        raise TypeError("@todo decorator must wrap a function directly")
+    else:
+        items = [
+            (CellRules, func), (CellFactories, todo_factory),
+            (CellValues, None), (IsReceiver, True),
+        ]
+        return _invoke_callback(items, func, __proptype=TodoProperty, **kw)
 
 def initattrs(ob, cls):
     for k, v in IsOptional(cls).iteritems():
-        if not v:
-            getattr(ob, k)
+        if not v: getattr(ob, k)
 
 def without_observer(func, *args, **kw):
+    """Run func(*args, **kw) without making the current rule depend on it"""
     o = _get_state()[1]
     if o:
         tmp, o._mailbox = o._mailbox, Mailbox(o)
-        try:
-            return func(*args, **kw)
-        finally:
-            o._mailbox = tmp
+        try:     return func(*args, **kw)
+        finally: o._mailbox = tmp
     else:
         return func(*args, **kw)
-
-
 
 
 class Component(object):
@@ -393,7 +391,7 @@ def repeat():
         raise RuntimeError("repeat() must be called from a rule")
     
 def poll():
-    """Schedule the current rule to be run again, repeatedly"""
+    """Recalculate this rule the next time *any* other cell is set"""
     pulse, observer, todo = _get_state()
     if observer:
         return pulse.cell.value
@@ -417,7 +415,7 @@ class CellProperty(object):
         self.__name__ = name
 
     def __repr__(self):
-        return "CellProperty(%r)" % self.__name__
+        return "%s(%r)" % (self.__class__.__name__, self.__name__)
 
     def __get__(self, ob, typ=None):
         if ob is None:
@@ -446,8 +444,90 @@ class CellProperty(object):
             cell.value = value
 
     def __eq__(self, other):
-        return type(other) is CellProperty and other.__name__==self.__name__
+        return type(other) is type(self) and other.__name__==self.__name__
 
     def __ne__(self, other):
-        return type(other) is not CellProperty or other.__name__!=self.__name__
+        return type(other) is not type(self) or other.__name__!=self.__name__
+
+def _invoke_callback(
+    extras, func=_sentinel, value=_sentinel, __frame=None, __name=None,
+    __proptype = CellProperty
+):
+    frame = __frame or sys._getframe(2)
+    name  = __name
+    items = list(extras)
+
+    if func is not _sentinel:
+        items.append((CellRules, func))
+        if func is not None and func.__name__!='<lambda>':
+            name = name or func.__name__
+
+    if value is not _sentinel:
+        items.append((CellValues, value))
+
+    def callback(frame, name, func, locals):
+        for role, value in items:
+            role.for_frame(frame).set(name, value)
+        IsReceiver.for_frame(frame).defaults[name] = False
+        IsOptional.for_frame(frame).defaults[name] = False
+        CellFactories.for_frame(frame).defaults[name] = default_factory
+        return __proptype(name)
+
+    if name:
+        return callback(frame, name, func, None)
+    else:
+        decorate_assignment(callback, frame=frame)
+        return _sentinel
+
+
+
+
+
+
+
+
+
+
+
+
+class TodoProperty(CellProperty):
+    """Property representing a ``todo`` attribute"""
+
+    decorate(property)
+    def future(self):
+        """Get a read-only property for the "future" of this attribute"""
+        name = self.__name__
+        def get(ob):
+            try:
+                cell = ob.__cells__[name]
+            except KeyError:
+                typ = type(ob)
+                cell = CellFactories(typ)[name](typ, ob, name)
+                cell = ob.__cells__.setdefault(name, cell)
+            if cell._writebuf is _sentinel:
+                if current_observer() is None:
+                    raise RuntimeError("future can only be accessed from a @modifier")
+                cell.value = CellRules(type(ob))[name].__get__(ob)()
+            return cell._writebuf            
+        return property(
+            get, doc="The future value of the %r attribute" % name
+        )
+
+def todo_factory(typ, ob, name):
+    """Factory for ``todo`` cells"""
+    rule = CellRules(typ).get(name).__get__(ob, typ)
+    return Cell(None, rule(), True)
+
+def modifier(method):
+    """Mark a method as performing operations in the future"""
+    def decorated(*args, **kw):
+        pulse, observer, todo = state = _get_state()
+        state[1] = Cell()
+        try:
+            return method(*args, **kw)
+        finally:        
+            state[1] = observer
+            if observer is None:
+                _cleanup(state)
+    return rewrap(method, decorated)
 
