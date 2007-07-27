@@ -1,4 +1,4 @@
-from peak.context import get_ident, InputConflict
+from thread import get_ident
 from peak.util.symbols import Symbol
 from weakref import ref
 from peak.util.roles import Role, Registry
@@ -7,7 +7,7 @@ import sys
 
 __all__ = [
     'Cell', 'Constant', 'repeat', 'rule', 'rules', 'values', 'optional',
-    'Component', 'without_observer', 'receiver',
+    'Component', 'without_observer', 'receiver', 'InputConflict'
 ]
 
 _states = {}
@@ -141,8 +141,8 @@ class ReadOnlyCell(object):
         return "%s(%r, %r%s)" %(self.__class__.__name__,self._rule,self.value,e)
 
 
-
-
+class InputConflict(Exception):
+    """Attempt to set a rule that causes a visible conflict in the state"""
 
 
 
