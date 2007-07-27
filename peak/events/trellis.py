@@ -1,8 +1,6 @@
 from thread import get_ident
-from peak.util.symbols import Symbol
 from weakref import ref
-from peak.util.roles import Role, Registry
-from peak.util.decorators import decorate, struct, decorate_assignment, rewrap
+from peak.util import symbols, roles, decorators
 import sys
 
 __all__ = [
@@ -12,7 +10,7 @@ __all__ = [
 ]
 
 _states = {}
-NO_VALUE = Symbol('NO_VALUE', __name__)
+NO_VALUE = symbols.Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
 
 def _get_state():
@@ -34,6 +32,8 @@ class Mailbox(object):
     def __init__(self, owner, *args):
         self.owner = ref(owner)
         self.dependencies = list(args)
+
+
 
 
 
@@ -244,13 +244,13 @@ def current_observer(): return _get_state()[1]
 
 
 
-class CellValues(Registry):
+class CellValues(roles.Registry):
     """Registry for cell values"""
 
-class CellRules(Registry):
+class CellRules(roles.Registry):
     """Registry for cell rules"""
 
-class _Defaulting(Registry):
+class _Defaulting(roles.Registry):
     def __init__(self, subject):
         self.defaults = {}
         return super(_Defaulting, self).__init__(subject)
@@ -279,7 +279,7 @@ def default_factory(typ, ob, name):
         return Cell(rule, receiver=IsReceiver(typ).get(name, False))
     return Cell(rule, value, IsReceiver(typ).get(name, False))
 
-class Cells(Role):
+class Cells(roles.Role):
     __slots__ = ()
     role_key = classmethod(lambda cls: '__cells__')
     def __new__(cls, subject): return {}
@@ -476,7 +476,7 @@ def _invoke_callback(
     if name:
         return callback(frame, name, func, None)
     else:
-        decorate_assignment(callback, frame=frame)
+        decorators.decorate_assignment(callback, frame=frame)
         return _sentinel
 
 
@@ -492,8 +492,7 @@ def _invoke_callback(
 
 class TodoProperty(CellProperty):
     """Property representing a ``todo`` attribute"""
-
-    decorate(property)
+    decorators.decorate(property)
     def future(self):
         """Get a read-only property for the "future" of this attribute"""
         name = self.__name__
@@ -520,14 +519,15 @@ def todo_factory(typ, ob, name):
 
 def modifier(method):
     """Mark a method as performing modifications to Trellis data"""
-    def decorated(*args, **kw):
-        pulse, observer, todo = state = _get_state()
-        state[1] = observer or Cell()
+    def wrap(__method,__get_state,__cleanup,__Cell):
+        """
+        pulse, observer, todo = state = __get_state()
+        if observer:
+            return __method($args)
+        state[1] = __Cell()
         try:
-            return method(*args, **kw)
-        finally:        
-            state[1] = observer
-            if observer is None:
-                _cleanup(state)
-    return rewrap(method, decorated)
+            return __method($args)
+        finally:
+            state[1] = observer; __cleanup(state)"""
+    return decorators.template_function(wrap)(method,_get_state,_cleanup,Cell)
 
