@@ -6,7 +6,7 @@ import sys
 __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
-    'repeat', 'poll', 'without_observer', 'InputConflict', 
+    'discrete', 'repeat', 'poll', 'without_observer', 'InputConflict', 
 ]
 
 _states = {}
@@ -40,6 +40,7 @@ class Mailbox(object):
 
 
 class ReadOnlyCell(object):
+    """Base class for all cell types, also a read-only cell"""
     __slots__ = """
         _state _listeners _mailbox _current_val _rule _reset _changed_as_of
         _version __weakref__
@@ -47,16 +48,15 @@ class ReadOnlyCell(object):
     _writebuf = _sentinel
     _can_freeze = True
     _writable = False
-    def __init__(self, rule=None, value=None, receiver=False):
+
+    def __init__(self, rule=None, value=None, discrete=False):
         self._state = _get_state()
         self._listeners = []
         self._mailbox = Mailbox(self, None)
         self._changed_as_of = self._version = None
         self._current_val = value
         self._rule = rule
-        self._reset = (_sentinel, value)[bool(receiver)]
-        if receiver and rule is not None:
-            raise TypeError("Receivers can't have rules")
+        self._reset = (_sentinel, value)[bool(discrete)]
 
     def get_value(self):
         """Get the value of this cell"""
@@ -85,73 +85,101 @@ class ReadOnlyCell(object):
     def _check_dirty(self, state):
         pulse, observer, todo = state
         if pulse is self._version:
+            # We are already up to date, indicate whether we've changed
             return pulse is self._changed_as_of
 
-        previous = self._current_val
-        self._version = pulse
-        freeze = False
+        self._version = pulse   # Ensure circular rules terminate
 
-        if self._reset is not _sentinel and previous != self._reset:
-            new = self._reset
+        new = self._writebuf
+        if new is not _sentinel:
+            # We were assigned a value in the previous pulse
+            self._writebuf = _sentinel
+            have_new = True
         else:
-            new = self._writebuf
-            if new is not _sentinel:
-                self._writebuf = _sentinel
-                if self._reset is not _sentinel:
-                    todo.data.append(self)
-            elif self._rule:
+            have_new = False
+            if self._rule:
+                # We weren't assigned a value, see if we need to recalc
                 for d in self._mailbox.dependencies:
                     if (not d or d._changed_as_of is pulse
                          or d._version is not pulse and d._check_dirty(state)
-                    ):
+                    ):  # one of our dependencies changed, recalc
                         self._mailbox = m = Mailbox(self)  # break old deps
-                        state[1] = self
+                        state[1] = self    # we are the observer while calc-ing
                         try:
                             new = self._rule()
-                            freeze = not m.dependencies and self._can_freeze
+                            have_new = True
+                            if not m.dependencies and self._can_freeze:
+                                have_new = _sentinel    # flag for freezing
                             break
                         finally:
-                            state[1] = observer
-                else:
-                    return False
-            else:
-                return False
+                            state[1] = observer # put back the old observer
 
+        if have_new:
+            previous = self._current_val
+            if self._reset is not _sentinel and new is not self._reset:
+                # discrete cells are always "changed" if new non-reset value
+                previous = self._reset
+                todo.data.append(self)  # make sure we have a chance to reset
+
+        elif self._reset is not _sentinel:
+            # discrete cells reset if there's no new value set or calc'd
+            new = self._reset
+            have_new = True
+            previous = self._current_val
+
+        else:
+            # No new value and not discrete?  Then no change.
+            return False
+
+        # We have a new value, but has it actually changed?
         if new is not previous and new != previous:
+
+            # Yes, update our state and notify listeners
             self._current_val = new
             self._changed_as_of = pulse
-            
+            notify = pulse.data.append
+
             for c in self._listeners:
                 c = c()
                 if c is not None:
                     c = c.owner()
                     if c is not None and c._version is not pulse:
-                        pulse.data.append(c)
-            if freeze:
+                        notify(c)
+                        
+            if have_new is _sentinel:
+                # We no longer have any dependencies, so turn Constant
                 self._mailbox = self._listeners = self._rule = None
                 self.__class__ = Constant
-            return True
 
-        elif freeze:
-            self._mailbox = self._listeners = self._rule = None
-            self.__class__ = Constant
+            return have_new     # <- faster than a 'return True'
+
+        # implicit 'return None' is faster than explicitly returning False
+
 
     def __repr__(self):
-        e = ('', ', receiver[%r]'% self._reset)[self._reset is not _sentinel]
-        return "%s(%r, %r%s)" %(self.__class__.__name__,self._rule,self.value,e)
+        e = ('', ', discrete[%r]'% self._reset)[self._reset is not _sentinel]
+        return "%s(%r, %r%s)" % (
+            self.__class__.__name__, self._rule, self.value, e
+        )
 
     def ensure_recalculation(self):
         """Ensure that this cell's rule will be (re)calculated"""
         pulse, observer, todo = self._state
-        if observer is self:  # repeat()
+
+        if observer is self:
+            # repeat()
             self._mailbox.dependencies.insert(0, None)
             todo.data.append(self)
+
         elif self._rule is None:
             raise TypeError("Can't recalculate a cell without a rule")
+
         #elif observer and observer._state is not self._state:
         #    raise RuntimeError("Can't access cells in another task/thread")
+
         elif pulse is self._version:
             raise RuntimeError("Already recalculated")
+
         else:  
             self._mailbox.dependencies.append(None)
             pulse.data.append(self)
@@ -159,6 +187,19 @@ class ReadOnlyCell(object):
 
 class InputConflict(Exception):
     """Attempt to set a cell to two different values during the same pulse"""
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -187,7 +228,7 @@ class Constant(ReadOnlyCell):
         return "Constant(%r)" % (self.value,)
 
 def _cleanup(state):
-    pulse, observer, todo = state #= state or _get_state()
+    pulse, observer, todo = state
     while observer is None:
         if pulse.data:
             for item in pulse.data:
@@ -209,13 +250,13 @@ class Cell(ReadOnlyCell):
     __slots__ = '_writebuf'
     _writable = True
 
-    def __new__(cls, rule=None, value=_sentinel, receiver=False):
+    def __new__(cls, rule=None, value=_sentinel, discrete=False):
         if value is _sentinel and rule is not None:
-            return ReadOnlyCell(rule, None, receiver)
-        return ReadOnlyCell.__new__(cls, rule, value, receiver)
+            return ReadOnlyCell(rule, None, discrete)
+        return ReadOnlyCell.__new__(cls, rule, value, discrete)
 
-    def __init__(self, rule=None, value=None, receiver=False):
-        ReadOnlyCell.__init__(self, rule, value, receiver)
+    def __init__(self, rule=None, value=None, discrete=False):
+        ReadOnlyCell.__init__(self, rule, value, discrete)
         self._writebuf = _sentinel
 
     def set_value(self, value):
@@ -276,7 +317,7 @@ def default_factory(typ, ob, name):
     if rule is not None:
         rule = rule.__get__(ob, typ)
     if value is _sentinel:
-        return Cell(rule, receiver=IsReceiver(typ).get(name, False))
+        return Cell(rule, discrete=IsReceiver(typ).get(name, False))
     return Cell(rule, value, IsReceiver(typ).get(name, False))
 
 class Cells(roles.Role):
@@ -319,7 +360,7 @@ def values(**attrs):
 
 def receivers(**attrs):
     """Define multiple receiver-cell attributes"""
-    _set_multi(sys._getframe(1), attrs, _receiver, 'value')
+    _set_multi(sys._getframe(1), attrs, _discrete, 'value')
 
 def todos(**attrs):
     """Define multiple todo-cell attributes"""
@@ -332,11 +373,11 @@ def optional(func):
 
 def receiver(value):
     """Define a receiver-cell attribute"""
-    return _receiver(value, __frame=sys._getframe(1))
+    return _discrete(None, value, __frame=sys._getframe(1))
 
-def _receiver(value, **kw):
+def _discrete(func=_sentinel, value=_sentinel, **kw):
     items = [(IsReceiver, True), (CellFactories, default_factory)]
-    return _invoke_callback(items, None, value, **kw)
+    return _invoke_callback(items, func, value, **kw)
 
 def todo(func):
     """Define an attribute that can send "messages to the future" """
@@ -399,9 +440,9 @@ def poll():
         raise RuntimeError("poll() must be called from a rule")
 
 
-
-
-
+def discrete(func):
+    """Define a discrete rule attribute"""
+    return _discrete(func, __frame=sys._getframe(1))
 
 
 

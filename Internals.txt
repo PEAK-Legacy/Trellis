@@ -203,7 +203,7 @@ And uses the event flag from IsReceiver::
     >>> CellRules(Test)['x'] = None
     >>> IsReceiver(Test)['x'] = True
     >>> default_factory(Test, Test(), 'x')
-    Cell(None, None, receiver[None])
+    Cell(None, None, discrete[None])
 
 The todo_factory only uses the rule to create the default value, and always
 creates a rule-free receiver, regardless of the value or receiver flag
@@ -217,7 +217,7 @@ settings::
     >>> Test.to_x = Test.x.future
 
     >>> todo_factory(Test, Test(), 'x')
-    Cell(None, {}, receiver[{}])
+    Cell(None, {}, discrete[{}])
 
 
 future, @modifier, etc.
@@ -588,4 +588,55 @@ And now the repeated polling of the now-vanished cell stops::
     >>> Cell().value = 66
     >>> c.value = 20
     c = 20    
+
+
+Discrete Processing
+-------------------
+
+    >>> from peak.events import trellis
+    
+    >>> class LineReceiver(Component):
+    ...     bytes = receiver('')
+    ...     delimiter = value('\r\n')
+    ...     _buffer = ''
+    ...
+    ...     decorate(discrete)
+    ...     def line(self):
+    ...         buffer = self._buffer = self._buffer + self.bytes
+    ...         lines = buffer.split(self.delimiter, 1)
+    ...         if len(lines)>1:
+    ...             buffer = self._buffer = lines[1]
+    ...             trellis.repeat()
+    ...             return lines[0]
+    ...
+    ...     decorate(trellis.rule)
+    ...     def dump(self):
+    ...         if self.line is not None:
+    ...             print "Line:", self.line
+
+    >>> trellis.IsReceiver(LineReceiver)['line']
+    True
+
+    >>> lp = LineReceiver()
+    >>> lp.bytes = 'xyz'
+    >>> lp.bytes = '\r'
+    >>> lp.bytes = '\n'
+    Line: xyz
+    
+    >>> lp.bytes = "abcdef\r\nghijkl\r\nmnopq"
+    Line: abcdef
+    Line: ghijkl
+
+    >>> lp.bytes = "FOObarFOObazFOOspam\n"
+    >>> lp.delimiter = "FOO"
+    Line: mnopq
+    Line: bar
+    Line: baz
+
+    >>> lp.delimiter = "\n"
+    Line: spam
+
+    >>> lp.bytes = 'abc\nabc\n'
+    Line: abc
+    Line: abc
 

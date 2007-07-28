@@ -211,7 +211,7 @@ Events::
     ...     return last_ping.value
 
     >>> last_ping = Cell(last_ping)
-    >>> ping = Cell(receiver=True)
+    >>> ping = Cell(discrete=True)
 
     >>> last_ping
     ReadOnlyCell(<function last_ping...>, None)
@@ -709,7 +709,7 @@ Feature Comparisons
 | Observers/side-effects allowed directly | YES     | NO      | ?         |
 | in rules?                               |         |         |           |
 +-----------------------------------------+---------+---------+-----------+
-| "Ephemeral" or "receiver" cells         | YES     | YES     | NO        |
+| "Ephemeral" or "discrete" cells         | YES     | YES     | NO        |
 +-----------------------------------------+---------+---------+-----------+
 | Threading model [3]_                    | Free    | Free    | Blocking  |
 +-----------------------------------------+---------+---------+-----------+
