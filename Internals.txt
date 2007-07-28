@@ -495,11 +495,20 @@ Repeating, Polling, Recalc
       ...
     RuntimeError: repeat() must be called from a rule
 
+    >>> c = Cell(lambda:42)
+    >>> c.value
+    42
+    >>> c.ensure_recalculation()
+    Traceback (most recent call last):
+      ...
+    TypeError: Can't recalculate a cell without a rule
+
     >>> c = Cell(value=99)
     >>> c.ensure_recalculation()
     Traceback (most recent call last):
       ...
     TypeError: Can't recalculate a cell without a rule
+
 
     >>> def hello(): print "c =", c.value
     >>> c1 = Cell(hello)
