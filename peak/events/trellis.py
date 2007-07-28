@@ -6,7 +6,8 @@ import sys
 __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
-    'discrete', 'repeat', 'poll', 'without_observer', 'InputConflict', 
+    'discrete', 'repeat', 'poll', 'without_observer', 'InputConflict',
+    'task', 'resume', 'Pause', 'Value', 'TaskCell'
 ]
 
 _states = {}
@@ -38,7 +39,6 @@ class Mailbox(object):
 
 
 
-
 class ReadOnlyCell(object):
     """Base class for all cell types, also a read-only cell"""
     __slots__ = """
@@ -47,7 +47,7 @@ class ReadOnlyCell(object):
     """.split()
     _writebuf = _sentinel
     _can_freeze = True
-    _writable = False
+    _writable = _const_type = False
 
     def __init__(self, rule=None, value=None, discrete=False):
         self._state = _get_state()
@@ -124,8 +124,8 @@ class ReadOnlyCell(object):
         elif self._reset is not _sentinel:
             # discrete cells reset if there's no new value set or calc'd
             new = self._reset
-            have_new = True
             previous = self._current_val
+            have_new = (new != previous)
 
         else:
             # No new value and not discrete?  Then no change.
@@ -146,14 +146,12 @@ class ReadOnlyCell(object):
                     if c is not None and c._version is not pulse:
                         notify(c)
                         
-            if have_new is _sentinel:
-                # We no longer have any dependencies, so turn Constant
-                self._mailbox = self._listeners = self._rule = None
-                self.__class__ = Constant
+        if have_new is _sentinel:
+            # We no longer have any dependencies, so turn Constant
+            self._mailbox = self._listeners = self._rule = None
+            self.__class__ = self._const_type or Constant
 
-            return have_new     # <- faster than a 'return True'
-
-        # implicit 'return None' is faster than explicitly returning False
+        return have_new
 
 
     def __repr__(self):
@@ -161,6 +159,8 @@ class ReadOnlyCell(object):
         return "%s(%r, %r%s)" % (
             self.__class__.__name__, self._rule, self.value, e
         )
+
+
 
     def ensure_recalculation(self):
         """Ensure that this cell's rule will be (re)calculated"""
@@ -225,7 +225,7 @@ class Constant(ReadOnlyCell):
         return False
 
     def __repr__(self):
-        return "Constant(%r)" % (self.value,)
+        return "%s(%r)" % (type(self).__name__, self.value)
 
 def _cleanup(state):
     pulse, observer, ctrl = state
@@ -310,15 +310,15 @@ class IsOptional(_Defaulting):
 class IsDiscrete(_Defaulting):
     """Registry for flagging that a cell is an event"""
 
-def default_factory(typ, ob, name):
+def default_factory(typ, ob, name, celltype=Cell):
     """Default factory for making cells"""
     rule = CellRules(typ).get(name)
     value = CellValues(typ).get(name, _sentinel)
     if rule is not None:
         rule = rule.__get__(ob, typ)
     if value is _sentinel:
-        return Cell(rule, discrete=IsDiscrete(typ).get(name, False))
-    return Cell(rule, value, IsDiscrete(typ).get(name, False))
+        return celltype(rule, discrete=IsDiscrete(typ).get(name, False))
+    return celltype(rule, value, IsDiscrete(typ).get(name, False))
 
 class Cells(roles.Role):
     __slots__ = ()
@@ -330,11 +330,11 @@ def rule(func):
     """Define a rule cell attribute"""
     return _rule(func, __frame=sys._getframe(1))
 
-def _rule(func, **kw):
+def _rule(func, deco='@rule', factory=default_factory, **kw):
     if isinstance(func, CellProperty):
-        raise TypeError("@rule decorator must wrap a function directly")
+        raise TypeError(deco+" decorator must wrap a function directly")
     else:
-        items = [(CellRules, func), (CellFactories, default_factory)]
+        items = [(CellRules, func), (CellFactories, factory)]
         return _invoke_callback(items, func, **kw)
 
 def value(value):
@@ -445,6 +445,88 @@ def discrete(func):
     return _discrete(func, __frame=sys._getframe(1))
 
 
+
+
+
+
+class TaskCell(ReadOnlyCell):
+    """Cell that manages a generator-based task"""
+    __slots__ = '_result', '_error'
+
+    def __init__(self, func, value=None, discrete=False):
+        VALUE = self._result = []
+        ERROR = self._error  = []               
+        STACK = [func()]; CALL = STACK.append; RETURN = STACK.pop;
+        def step():
+            while STACK:
+                try:
+                    it = STACK[-1]
+                    if VALUE and hasattr(it, 'send'):
+                        rv = it.send(VALUE[0])
+                    elif ERROR and hasattr(it, 'throw'):
+                        rv = it.throw(*ERROR.pop())
+                    else:
+                        rv = it.next()
+                except:
+                    del VALUE[:]
+                    ERROR.append(sys.exc_info())
+                    if ERROR[-1][0] is StopIteration:
+                        ERROR.pop() # not really an error
+                    RETURN()
+                else:
+                    del VALUE[:]
+                    if rv is Pause:
+                        break
+                    elif hasattr(rv, 'next'):
+                        CALL(rv); continue
+                    elif isinstance(rv, Value):
+                        rv = rv.value
+                    VALUE.append(rv)
+                    if len(STACK)==1: break
+                    RETURN()
+            if STACK and not ERROR and not current_observer()._mailbox.dependencies:
+                repeat()    # don't become Constant while still running
+            return resume()
+
+        ReadOnlyCell.__init__(self, step, value, discrete)
+
+class CompletedTask(Constant, TaskCell):
+    """Task that has exhausted its generator"""
+    __slots__ = ()
+
+TaskCell._const_type = CompletedTask
+
+Pause = symbols.Symbol('Pause', __name__)
+
+decorators.struct()
+def Value(value):
+    """Wrapper for yielding a value from a task"""
+    return value,
+
+def resume():
+    """Get the result of a nested task invocation (needed for Python<2.5)"""
+    c = current_observer()
+    if not isinstance(c, TaskCell):
+        raise RuntimeError("resume() must be called from a @trellis.task")
+    elif c._result:
+        return c._result[0]
+    elif c._error:
+        e = c._error.pop()
+        try:
+            raise e[0], e[1], e[2]
+        finally:
+            del e
+    elif c._reset is not _sentinel:
+        return c._reset
+    else:
+        return c.value
+
+def task_factory(typ, ob, name):
+    return default_factory(typ, ob, name, TaskCell)
+
+def task(func):
+    """Define a rule cell attribute"""
+    return _rule(func, '@task', task_factory, __frame=sys._getframe(1))
 
 
 

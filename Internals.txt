@@ -258,8 +258,28 @@ future, @modifier, etc.
     t.x = {'y': 2, 'x': 1}
 
 
+task_factory
+------------
 
-    
+The task_factory creates a TaskCell::
+
+    >>> from peak.events.trellis import task_factory
+    >>> def f(self): yield 1
+    >>> CellRules(Test)['x'] = f
+    >>> IsDiscrete(Test)['x'] = True
+    >>> t = task_factory(Test, Test(), 'x')
+    >>> t
+    TaskCell(<function step at...>, 54, discrete[54])
+    >>> t
+    CompletedTask(54)
+
+    >>> IsDiscrete(Test)['x'] = False
+    >>> t = task_factory(Test, Test(), 'x')
+    >>> t
+    TaskCell(<function step at...>, 1)
+    >>> t    
+    CompletedTask(1)
+
 
 Decorators
 ----------
@@ -307,20 +327,24 @@ Decorators
     ...     )
     ...     to_add = added.future
     ...     to_remove = removed.future
+    ...     decorate(task)
+    ...     def task(self): yield None    
 
     >>> CellRules(Test)
-    {'removed': <function <lambda> at...>,
-     'added': <function <lambda> at ...>}
+    {'added': <function <lambda> at ...>,
+     'removed': <function <lambda> at...>,
+     'task': <function task at ...>}
 
     >>> CellValues(Test)
     {'removed': None, 'added': None}
 
     >>> IsDiscrete(Test)
-    {'removed': True, 'added': True}
+    {'added': True, 'removed': True, 'task': False}
 
     >>> CellFactories(Test)
-    {'removed': <function todo_factory...>,
-     'added': <function todo_factory...>}
+    {'added': <function todo_factory...>,
+     'removed': <function todo_factory...>,
+     'task': <function task_factory...>}
 
 
 Error messages::
@@ -331,6 +355,13 @@ Error messages::
     Traceback (most recent call last):
       ...
     TypeError: @rule decorator must wrap a function directly
+
+    >>> class Test:
+    ...     decorate(task, optional)
+    ...     def wrong(): pass
+    Traceback (most recent call last):
+      ...
+    TypeError: @task decorator must wrap a function directly
 
     >>> class Test:
     ...     decorate(todo, optional)
@@ -405,6 +436,8 @@ cells::
 
     >>> t.__cells__.keys()
     ['A', 'B', 'always', 'only_on_request', 'Y', 'X', 'Z']    
+
+    >>> del show_X
 
 Keyword arguments are accepted by the constructor::
 
@@ -639,4 +672,79 @@ Discrete Processing
     >>> lp.bytes = 'abc\nabc\n'
     Line: abc
     Line: abc
+
+
+Multitasking
+------------
+
+    >>> def raiser():
+    ...     raise Exception("foo")
+    ...     yield None  # make it a generator
+
+    >>> raiser().next()
+    Traceback (most recent call last):
+      ...
+    Exception: foo
+
+    >>> resume()
+    Traceback (most recent call last):
+      ...
+    RuntimeError: resume() must be called from a @trellis.task
+   
+    >>> def yielder(ob):
+    ...     while not ob.bytes:
+    ...         print "pausing"
+    ...         yield Pause
+    ...     yield ob.bytes
+
+    >>> def t():
+    ...     yield 1
+    ...     yield 2
+    ...     while 1:
+    ...         yield yielder(lp);
+    ...         print "Got:", resume()
+    ...         yield Pause     # nothing changes unless we pause
+
+    >>> c = TaskCell(t)
+    >>> c.value
+    pausing
+    2
+    >>> c.value
+    2
+
+    >>> lp.bytes = 'xyz'
+    Got: xyz
+    pausing
+
+    >>> lp.bytes = 'abc'
+    Got: abc
+    pausing
+
+    >>> def t():
+    ...     yield 1
+    ...     yield 2
+    ...     yield yielder(lp)
+    ...     yield raiser()
+    
+    >>> c = TaskCell(t)
+    >>> c.value
+    pausing
+    2
+    >>> c.value
+    2
+    >>> lp.bytes = 'xyz'
+    Traceback (most recent call last):
+      ...
+    Exception: foo
+
+    >>> c.value
+    2
+
+    >>> y = yielder(lp)
+    >>> def t():
+    ...     yield Value(y)
+    >>> TaskCell(t).value is y
+    True
+
+    >>> del lp.__cells__    # break reference cycles before globals are cleared
 
