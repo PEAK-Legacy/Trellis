@@ -134,7 +134,7 @@ attribute::
 Class Metadata
 --------------
 
-    >>> from peak.events.trellis import CellRules, CellValues, IsReceiver
+    >>> from peak.events.trellis import CellRules, CellValues, IsDiscrete
     >>> from peak.events.trellis import IsOptional, default_factory, NO_VALUE
     >>> from peak.events.trellis import *
 
@@ -174,14 +174,14 @@ to default_factory::
     Constant(27)
 
     
-IsOptional and IsReceiver default to false for any attribute that has an
+IsOptional and IsDiscrete default to false for any attribute that has an
 explicit setting defined in a given class in any other registry besides
 themselves::
 
     >>> IsOptional(Test)
     {'y': False, 'x': False}
 
-    >>> IsReceiver(Test)
+    >>> IsDiscrete(Test)
     {'y': False, 'x': False}
   
 The default_factory handles _sentinel values by not passing them to the Cell
@@ -198,10 +198,10 @@ And it binds non-None rules to the instance::
     >>> default_factory(Test, Test(), 'x')
     ReadOnlyCell(<bound method Test.<lambda> of <Test object at...>>, 42)
     
-And uses the event flag from IsReceiver::
+And uses the event flag from IsDiscrete::
 
     >>> CellRules(Test)['x'] = None
-    >>> IsReceiver(Test)['x'] = True
+    >>> IsDiscrete(Test)['x'] = True
     >>> default_factory(Test, Test(), 'x')
     Cell(None, None, discrete[None])
 
@@ -211,7 +211,7 @@ settings::
 
     >>> CellRules(Test)['x'] = lambda self: dict()
     >>> CellValues(Test)['x'] = 54
-    >>> IsReceiver(Test)['x'] = False
+    >>> IsDiscrete(Test)['x'] = False
 
     >>> Test.x = TodoProperty('x')
     >>> Test.to_x = Test.x.future
@@ -288,7 +288,7 @@ Decorators
     >>> CellValues(Test)
     {'anEvent': -1, 'todo': None}
 
-    >>> IsReceiver(Test)
+    >>> IsDiscrete(Test)
     {'anEvent': True, 'optRule': False, 'aRule': False, 'todo': True}
 
     >>> CellFactories(Test)
@@ -315,7 +315,7 @@ Decorators
     >>> CellValues(Test)
     {'removed': None, 'added': None}
 
-    >>> IsReceiver(Test)
+    >>> IsDiscrete(Test)
     {'removed': True, 'added': True}
 
     >>> CellFactories(Test)
@@ -362,7 +362,7 @@ Components
     ...     rules(B=lambda s:hello("B!"))
     
 
-    >>> IsReceiver(Test)
+    >>> IsDiscrete(Test)
     {'A': False, 'B': False, 'always': False, 'only_on_request': False,
      'Y': True, 'X': False, 'Z': False}
 
@@ -614,7 +614,7 @@ Discrete Processing
     ...         if self.line is not None:
     ...             print "Line:", self.line
 
-    >>> trellis.IsReceiver(LineReceiver)['line']
+    >>> trellis.IsDiscrete(LineReceiver)['line']
     True
 
     >>> lp = LineReceiver()

@@ -307,7 +307,7 @@ class CellFactories(_Defaulting):
 class IsOptional(_Defaulting):
     """Registry for flagging that an attribute need not be activated"""
 
-class IsReceiver(_Defaulting):
+class IsDiscrete(_Defaulting):
     """Registry for flagging that a cell is an event"""
 
 def default_factory(typ, ob, name):
@@ -317,8 +317,8 @@ def default_factory(typ, ob, name):
     if rule is not None:
         rule = rule.__get__(ob, typ)
     if value is _sentinel:
-        return Cell(rule, discrete=IsReceiver(typ).get(name, False))
-    return Cell(rule, value, IsReceiver(typ).get(name, False))
+        return Cell(rule, discrete=IsDiscrete(typ).get(name, False))
+    return Cell(rule, value, IsDiscrete(typ).get(name, False))
 
 class Cells(roles.Role):
     __slots__ = ()
@@ -376,7 +376,7 @@ def receiver(value):
     return _discrete(None, value, __frame=sys._getframe(1))
 
 def _discrete(func=_sentinel, value=_sentinel, **kw):
-    items = [(IsReceiver, True), (CellFactories, default_factory)]
+    items = [(IsDiscrete, True), (CellFactories, default_factory)]
     return _invoke_callback(items, func, value, **kw)
 
 def todo(func):
@@ -389,7 +389,7 @@ def _todo(func, **kw):
     else:
         items = [
             (CellRules, func), (CellFactories, todo_factory),
-            (CellValues, None), (IsReceiver, True),
+            (CellValues, None), (IsDiscrete, True),
         ]
         return _invoke_callback(items, func, __proptype=TodoProperty, **kw)
 
@@ -509,7 +509,7 @@ def _invoke_callback(
     def callback(frame, name, func, locals):
         for role, value in items:
             role.for_frame(frame).set(name, value)
-        IsReceiver.for_frame(frame).defaults[name] = False
+        IsDiscrete.for_frame(frame).defaults[name] = False
         IsOptional.for_frame(frame).defaults[name] = False
         CellFactories.for_frame(frame).defaults[name] = default_factory
         return __proptype(name)
