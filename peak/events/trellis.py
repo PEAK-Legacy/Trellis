@@ -14,26 +14,26 @@ NO_VALUE = symbols.Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
 
 def _get_state():
-    tid = get_ident()
-    if tid not in _states:
-        _states[tid] = state = [Pulse(1), None, Pulse(2)]
-        state[0].cell = state[2].cell = Cell(current_pulse, 1)
-    return _states[tid]
+    try:
+        return _states[get_ident()]
+    except KeyError:
+        _Controller()
+        return _states[get_ident()]
 
-class Pulse(object):
-    __slots__ = 'data', 'number', 'cell'
-    def __init__(self, number, cell=None):
-        self.data = []
-        self.number = number
-        self.cell = cell
-
+class _Controller:
+    def __init__(self):
+        _states.setdefault(get_ident(), [1, None, self])
+        now = self.now = []
+        later = self.later = []
+        self.notify = now.append
+        self.change = later.append
+        self.cell = Cell(current_pulse, 1)
+    
 class Mailbox(object):
     __slots__ = '__weakref__', 'owner', 'dependencies'
     def __init__(self, owner, *args):
         self.owner = ref(owner)
         self.dependencies = list(args)
-
-
 
 
 
@@ -60,7 +60,7 @@ class ReadOnlyCell(object):
 
     def get_value(self):
         """Get the value of this cell"""
-        pulse, observer, todo = state = self._state
+        pulse, observer, ctrl = state = self._state
         if observer is None:
             # XXX we should switch to current state here, if needed
             if pulse is not self._version:
@@ -83,7 +83,7 @@ class ReadOnlyCell(object):
     value = property(get_value)
 
     def _check_dirty(self, state):
-        pulse, observer, todo = state
+        pulse, observer, ctrl = state
         if pulse is self._version:
             # We are already up to date, indicate whether we've changed
             return pulse is self._changed_as_of
@@ -119,7 +119,7 @@ class ReadOnlyCell(object):
             if self._reset is not _sentinel and new is not self._reset:
                 # discrete cells are always "changed" if new non-reset value
                 previous = self._reset
-                todo.data.append(self)  # make sure we have a chance to reset
+                ctrl.change(self)  # make sure we have a chance to reset
 
         elif self._reset is not _sentinel:
             # discrete cells reset if there's no new value set or calc'd
@@ -137,7 +137,7 @@ class ReadOnlyCell(object):
             # Yes, update our state and notify listeners
             self._current_val = new
             self._changed_as_of = pulse
-            notify = pulse.data.append
+            notify = ctrl.notify
 
             for c in self._listeners:
                 c = c()
@@ -164,12 +164,12 @@ class ReadOnlyCell(object):
 
     def ensure_recalculation(self):
         """Ensure that this cell's rule will be (re)calculated"""
-        pulse, observer, todo = self._state
+        pulse, observer, ctrl = self._state
 
         if observer is self:
             # repeat()
             self._mailbox.dependencies.insert(0, None)
-            todo.data.append(self)
+            ctrl.change(self)
 
         elif self._rule is None:
             raise TypeError("Can't recalculate a cell without a rule")
@@ -182,7 +182,7 @@ class ReadOnlyCell(object):
 
         else:  
             self._mailbox.dependencies.append(None)
-            pulse.data.append(self)
+            ctrl.notify(self)
 
 
 class InputConflict(Exception):
@@ -228,20 +228,20 @@ class Constant(ReadOnlyCell):
         return "Constant(%r)" % (self.value,)
 
 def _cleanup(state):
-    pulse, observer, todo = state
+    pulse, observer, ctrl = state
     while observer is None:
-        if pulse.data:
-            for item in pulse.data:
+        if ctrl.now:
+            for item in ctrl.now:
                 item._check_dirty(state)
-            del pulse.data[:]
-        if not todo.data:
+            del ctrl.now[:]
+        if not ctrl.later:
             return    # no changes, stay in the current pulse
 
         # Begin a new pulse
-        pulse.data = None   # don't keep a list around any longer
-        pulse = state[0] = todo
-        todo = state[2] = Pulse(pulse.number+1, pulse.cell)
-        pulse.cell.ensure_recalculation()
+        state[0] += 1
+        ctrl.now = ctrl.later; ctrl.notify = ctrl.change
+        ctrl.later = later = []; ctrl.change = later.append
+        ctrl.cell.ensure_recalculation()
 
 
 class Cell(ReadOnlyCell):
@@ -261,7 +261,7 @@ class Cell(ReadOnlyCell):
 
     def set_value(self, value):
         """Set the value of this cell"""
-        pulse, observer, todo = state = self._state
+        pulse, observer, ctrl = state = self._state
         #if observer is None:
         #    XXX we should switch to current state here, if needed
         #elif observer._state is not state:
@@ -274,14 +274,14 @@ class Cell(ReadOnlyCell):
         if old is not _sentinel and old is not value and old!=value:
             raise InputConflict(old, value) # XXX
         self._writebuf = value
-        todo.data.append(self)
+        ctrl.change(self)
         if not observer:
             _cleanup(state)
 
     value = property(ReadOnlyCell.get_value, set_value)
 
 
-def current_pulse():    return _get_state()[0].number
+def current_pulse():    return _get_state()[0]
 def current_observer(): return _get_state()[1]
 
 
@@ -433,9 +433,9 @@ def repeat():
     
 def poll():
     """Recalculate this rule the next time *any* other cell is set"""
-    pulse, observer, todo = _get_state()
+    pulse, observer, ctrl = _get_state()
     if observer:
-        return pulse.cell.value
+        return ctrl.cell.value
     else:
         raise RuntimeError("poll() must be called from a rule")
 
@@ -562,13 +562,13 @@ def modifier(method):
     """Mark a method as performing modifications to Trellis data"""
     def wrap(__method,__get_state,__cleanup,__Cell):
         """
-        pulse, observer, todo = state = __get_state()
-        if observer:
+        __pulse, __observer, __ctrl = __state = __get_state()
+        if __observer:
             return __method($args)
-        state[1] = __Cell()
+        __state[1] = __Cell()
         try:
             return __method($args)
         finally:
-            state[1] = observer; __cleanup(state)"""
+            __state[1] = __observer; __cleanup(__state)"""
     return decorators.template_function(wrap)(method,_get_state,_cleanup,Cell)
 
