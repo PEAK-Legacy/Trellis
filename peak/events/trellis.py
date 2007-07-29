@@ -1,13 +1,13 @@
 from thread import get_ident
 from weakref import ref
 from peak.util import symbols, roles, decorators
-import sys
+import sys, UserDict, UserList, sets
 
 __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
     'discrete', 'repeat', 'poll', 'without_observer', 'InputConflict',
-    'task', 'resume', 'Pause', 'Value', 'TaskCell'
+    'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Value', 'TaskCell'
 ]
 
 _states = {}
@@ -653,4 +653,414 @@ def modifier(method):
         finally:
             __state[1] = __observer; __cleanup(__state)"""
     return decorators.template_function(wrap)(method,_get_state,_cleanup,Cell)
+
+class Dict(UserDict.IterableUserDict, Component):
+    """Dictionary-like object that recalculates observers when it's changed
+
+    The ``added``, ``changed``, and ``deleted`` attributes are dictionaries
+    showing the current added/changed/deleted contents.  Note that ``changed``
+    may include items that were set as of this recalc, but in fact have the
+    same value as they had in the previous recalc, as no value comparisons are
+    done!
+
+    You may observe these attributes directly, but any rule that reads the
+    dictionary in any way (e.g. gets items, iterates, checks length, etc.)
+    will be recalculated if the dictionary is changed in any way.
+
+    Any changes that happen to the dictionary are made "in the future", but all
+    read operations are done "in the present" -- so you can't see the effect of
+    any changes until the next Trellis recalculation.
+
+    Note that this means operations like pop(), popitem(), and setdefault()
+    that both read and write in the same operation are NOT supported, since
+    reading must always happen in the present, whereas writing is done to the
+    future version of the dictionary.
+    """
+    added = todo(lambda self: {})
+    deleted = todo(lambda self: {})
+    changed = todo(lambda self: {})
+
+    to_add = added.future
+    to_change = changed.future
+    to_delete = deleted.future
+
+    def __init__(self, other=(), **kw):
+        Component.__init__(self)
+        if other: self.data.update(other)
+        if kw:    self.data.update(kw)
+
+    def copy(self):
+        return self.__class__(self.data)
+
+    def get(self, key, failobj=None):
+        return self.data.get(key, failobj)
+
+    decorators.decorate(rule)    
+    def data(self):
+        data = self.data
+        if data is None:
+            data = {}
+        if self.deleted:
+            for key in self.deleted:
+                del data[key]
+        if self.added:
+            data.update(self.added)
+        if self.changed:
+            data.update(self.changed)
+        return data    
+
+    decorators.decorate(modifier)    
+    def __setitem__(self, key, item):
+        if key in self.to_delete:
+            del self.to_delete[key]
+        if key in self.data:
+            self.to_change[key] = item
+        else:
+            self.to_add[key] = item
+
+    decorators.decorate(modifier)    
+    def __delitem__(self, key):
+        if key in self.to_add:
+            del self.to_add[key]
+        elif key in self.data and key not in self.to_delete:
+            self.to_delete[key] = self.data[key]
+            if key in self.to_change:
+                del self.to_change[key]
+        else:
+            raise KeyError, key
+                
+    decorators.decorate(modifier)
+    def clear(self):
+        self.to_add.clear()
+        self.to_change.clear()
+        self.to_delete.update(self.data)
+
+
+    decorators.decorate(modifier)    
+    def update(self, d=(), **kw):
+        if d:
+            if kw:
+                d = dict(d);  d.update(kw)
+            elif not hasattr(d, 'iteritems'):
+                d = dict(d)
+        else:
+            d = kw
+        to_change = self.to_change
+        to_add = self.to_add
+        to_delete = self.to_delete
+        data = self.data
+        for k, v in d.iteritems():
+            if k in to_delete:
+                del to_delete[k]
+            if k in data:
+                to_change[k] = d[k]
+            else:
+                to_add[k] = d[k]
+
+    def setdefault(self, key, failobj=None):
+        """setdefault() is disallowed because it 'reads the future'"""
+        raise InputConflict(
+            "Can't read and write in the same operation"
+        )
+    def pop(self, key, *args):
+        """The pop() method is disallowed because it 'reads the future'"""
+        raise InputConflict(
+            "Can't read and write in the same operation"
+        )
+    def popitem(self):
+        """The popitem() method is disallowed because it 'reads the future'"""
+        raise InputConflict(
+            "Can't read and write in the same operation"
+        )
+    def __hash__(self):
+        raise TypeError
+
+
+
+class List(UserList.UserList, Component):
+    """List-like object that recalculates observers when it's changed
+
+    The ``changed`` attribute is True whenever the list has changed as of the
+    current recalculation, and any rule that reads the list in any way (e.g.
+    gets items, iterates, checks length, etc.) will be recalculated if the
+    list is changed in any way.
+
+    Any changes that happen to the list are made "in the future", but all read
+    operations are done "in the present" -- so you can't see the effect of
+    any changes until the next Trellis recalculation.
+
+    Note that this type is not efficient for large lists, as a copy-on-write
+    strategy is used in each recalcultion that changes the list.  If what you
+    really want is e.g. a sorted read-only view on a set, don't use this.
+    """
+
+    updated = todo(lambda self: self.data[:])
+    future  = updated.future
+    changed = receiver(False)
+
+    def __init__(self, other=(), **kw):
+        Component.__init__(self, **kw)
+        self.data[:] = other
+    
+    decorators.decorate(rule)    
+    def data(self):
+        if self.changed:
+            return self.updated
+        return self.data or []
+
+    decorators.decorate(modifier)
+    def __setitem__(self, i, item):
+        self.changed = True
+        self.future[i] = item
+
+    decorators.decorate(modifier)
+    def __delitem__(self, i):
+        self.changed = True
+        del self.future[i]
+
+    decorators.decorate(modifier)
+    def __setslice__(self, i, j, other):
+        self.changed = True
+        self.future[i:j] = other
+
+    decorators.decorate(modifier)
+    def __delslice__(self, i, j):
+        self.changed = True
+        del self.future[i:j]
+
+    decorators.decorate(modifier)
+    def __iadd__(self, other):
+        self.changed = True
+        self.future.extend(other)
+        return self
+
+    decorators.decorate(modifier)
+    def append(self, item):
+        self.changed = True
+        self.future.append(item)
+
+    decorators.decorate(modifier)
+    def insert(self, i, item):
+        self.changed = True
+        self.future.insert(i, item)
+
+    decorators.decorate(modifier)
+    def extend(self, other):
+        self.changed = True
+        self.future.extend(other)
+
+    decorators.decorate(modifier)
+    def __imul__(self, n):
+        self.changed = True
+        self.future[:] = self.future * n
+        return self
+
+
+
+
+
+    decorators.decorate(modifier)
+    def remove(self, item):
+        self.changed = True
+        self.future.remove(item)
+
+    decorators.decorate(modifier)
+    def reverse(self):
+        self.changed = True
+        self.future.reverse()
+
+    decorators.decorate(modifier)
+    def sort(self, *args, **kw):
+        self.changed = True
+        self.future.sort(*args, **kw)
+
+    def pop(self, i=-1):
+        """The pop() method isn't supported, because it 'reads the future'"""
+        raise InputConflict(
+            "Can't read and write in the same operation"
+        )
+
+    def __hash__(self):
+        raise TypeError
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class Set(sets.Set, Component):
+    """Mutable set that recalculates observers when it's changed
+
+    The ``added`` and ``removed`` attributes can be watched for changes, but
+    any rule that simply uses the set (e.g. iterates over it, checks for
+    membership or size, etc.) will be recalculated if the set is changed.
+
+    Any changes that happen to the set are made "in the future", but anything
+    you read from the set is "in the present" -- so you can't see the effect of
+    any changes until the next Trellis recalculation.
+    """
+
+    added = todo(lambda self: set())
+    removed = todo(lambda self: set())
+
+    to_add = added.future
+    to_remove = removed.future
+    
+    def __init__(self, iterable=None, **kw):
+        """Construct a set from an optional iterable."""
+        Component.__init__(self, **kw)
+        if iterable is not None:
+            # we can update self._data in place, since no-one has seen it yet
+            sets.Set._update(self, iterable)
+
+    decorators.decorate(rule)
+    def _data(self):
+        """The dictionary containing the set data."""
+        data = self._data
+        if data is None:
+            data = {}
+        if self.removed:
+            for item in self.removed:
+                del data[item]
+        if self.added:
+            data.update(dict.fromkeys(self.added, True))
+        return data
+
+    def __setstate__(self, data):
+        self.__init__(data[0])
+
+    def _binary_sanity_check(self, other):
+        # Check that the other argument to a binary operation is also
+        # a set, raising a TypeError otherwise.
+        if not isinstance(other, set_like):
+            raise TypeError, "Binary operation only permitted between sets"
+
+    def pop(self):
+        """The pop() method isn't supported, because it 'reads the future'"""
+        raise InputConflict(
+            "Can't read and write in the same operation"
+        )
+
+    decorators.decorate(modifier)
+    def _update(self, iterable):
+        to_remove = self.to_remove
+        add = self.to_add.add
+        for item in iterable:
+            if item in to_remove:
+                to_remove.remove(item)
+            else:
+                add(item)
+
+    decorators.decorate(modifier)
+    def add(self, item):
+        """Add an element to a set (no-op if already present)"""
+        if item in self.to_remove:
+            self.to_remove.remove(item)
+        else:
+            self.to_add.add(item)
+
+    decorators.decorate(modifier)
+    def remove(self, item):
+        """Remove an element from a set (KeyError if not present)"""
+        if item in self.to_add:
+            self.to_add.remove(item)
+        elif item in self._data and item not in self.to_remove:
+            self.to_remove.add(item)
+        else:
+            raise KeyError(item)
+
+
+    decorators.decorate(modifier)
+    def clear(self):
+        """Remove all elements from this set."""
+        self.to_remove.update(self)
+        self.to_add.clear()              
+
+    def __ior__(self, other):
+        """Update a set with the union of itself and another."""
+        self._binary_sanity_check(other)
+        self._update(other)
+        return self
+
+    def __iand__(self, other):
+        """Update a set with the intersection of itself and another."""
+        self._binary_sanity_check(other)
+        self.intersection_update(other)
+        return self
+
+    decorators.decorate(modifier)
+    def difference_update(self, other):
+        """Remove all elements of another set from this set."""
+        data = self._data
+        to_add, to_remove = self.to_add, self.to_remove
+        for item in other:
+            if item in to_add: to_add.remove(item)
+            elif item in data: to_remove.add(item)
+
+    decorators.decorate(modifier)
+    def intersection_update(self, other):
+        """Update a set with the intersection of itself and another."""
+        to_remove = self.to_remove
+        to_add = self.to_add
+        self.to_add.intersection_update(other)
+        other = to_dict_or_set(other)
+        for item in self._data:
+            if item not in other:
+                to_remove.add(item)
+        return self
+
+
+        
+    decorators.decorate(modifier)
+    def symmetric_difference_update(self, other):
+        """Update a set with the symmetric difference of itself and another."""
+        data = self._data
+        to_add = self.to_add
+        to_remove = self.to_remove
+        for elt in to_dict_or_set(other):            
+            if elt in to_add:
+                to_add.remove(elt)      # Got it; get rid of it
+            elif elt in to_remove:
+                to_remove.remove(elt)   # Don't got it; add it
+            elif elt in data:
+                to_remove.add(elt)      # Got it; get rid of it
+            else:
+                to_add.add(elt)         # Don't got it; add it
+
+try:
+    set
+except NameError:
+    set = sets.Set
+    frozenset = sets.ImmutableSet
+    set_like = sets.BaseSet
+    dictlike = dict, sets.BaseSet
+else:
+    set_like = set, frozenset, sets.BaseSet
+    dictlike = (dict,) + set_like
+
+def to_dict_or_set(ob):
+    """Return the most basic set or dict-like object for ob
+    If ob is a sets.BaseSet, return its ._data; if it's something we can tell
+    is dictlike, return it as-is.  Otherwise, make a dict using .fromkeys()
+    """
+    if isinstance(ob, sets.BaseSet):
+        return ob._data
+    elif not isinstance(ob, dictlike):
+        return dict.fromkeys(ob)
+    return ob
+
+  
+
 

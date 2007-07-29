@@ -38,7 +38,7 @@ attribute of the corresponding cell in the object's ``__cells__`` dictionary::
 
     >>> Converter.C
     CellProperty('C')
-    
+
     >>> tc = Converter()
     >>> tc.C
     0
@@ -70,7 +70,7 @@ Getting or setting a cell attribute that has no cell in the object's
     Creating F cell for <class 'Converter'> instance
     200
     >>> tc.F = 42
-    
+
     >>> del tc.__cells__['F']
     >>> tc.F = 27
     Creating F cell for <class 'Converter'> instance
@@ -100,7 +100,7 @@ TodoProperty objects are like CellProperty, but offer an extra ``future``
 attribute::
 
     >>> from peak.events.trellis import TodoProperty, todo_factory
-    
+
     >>> class X(object):
     ...     x = TodoProperty('x')
     ...     future_x = x.future
@@ -129,7 +129,7 @@ attribute::
     True
     >>> TodoProperty('x')!=CellProperty('x')
     True
-    
+
 
 Class Metadata
 --------------
@@ -173,7 +173,7 @@ to default_factory::
     >>> t.__cells__['x']
     Constant(27)
 
-    
+
 IsOptional and IsDiscrete default to false for any attribute that has an
 explicit setting defined in a given class in any other registry besides
 themselves::
@@ -183,7 +183,7 @@ themselves::
 
     >>> IsDiscrete(Test)
     {'y': False, 'x': False}
-  
+
 The default_factory handles _sentinel values by not passing them to the Cell
 constructor::
 
@@ -197,7 +197,7 @@ And it binds non-None rules to the instance::
     >>> CellRules(Test)['x'] = lambda self: 42
     >>> default_factory(Test, Test(), 'x')
     ReadOnlyCell(<bound method Test.<lambda> of <Test object at...>>, 42)
-    
+
 And uses the event flag from IsDiscrete::
 
     >>> CellRules(Test)['x'] = None
@@ -236,14 +236,14 @@ future, @modifier, etc.
     Traceback (most recent call last):
       ...
     RuntimeError: future can only be accessed from a @modifier
-    
+
     >>> def add(key, val):
     ...     t.to_x[key] = val
     >>> add = modifier(add)
 
     >>> add(1, 2)
     t.x = {1: 2}
-    
+
     >>> def update(**kw):
     ...     for k, v in kw.items():
     ...         add(k, v)
@@ -277,7 +277,7 @@ The task_factory creates a TaskCell::
     >>> t = task_factory(Test, Test(), 'x')
     >>> t
     TaskCell(<function step at...>, 1)
-    >>> t    
+    >>> t
     CompletedTask(1)
 
 
@@ -285,7 +285,7 @@ Decorators
 ----------
 
     >>> from peak.util.decorators import decorate
-    
+
     >>> class Test:
     ...     def aRule(self):
     ...         return 42
@@ -299,7 +299,7 @@ Decorators
 
     >>> Test.todo
     TodoProperty('todo')
-    
+
     >>> CellRules(Test)
     {'anEvent': None,
      'optRule': <function <lambda> at...>,
@@ -316,7 +316,7 @@ Decorators
      'aRule': <function default_factory...>,
      'todo': <function todo_factory...>}
 
-    >>> IsOptional(Test)     
+    >>> IsOptional(Test)
     {'anEvent': False, 'optRule': True, 'aRule': False, 'todo': False}
 
 
@@ -328,7 +328,7 @@ Decorators
     ...     to_add = added.future
     ...     to_remove = removed.future
     ...     decorate(task)
-    ...     def task(self): yield None    
+    ...     def task(self): yield None
 
     >>> CellRules(Test)
     {'added': <function <lambda> at ...>,
@@ -376,7 +376,7 @@ Components
 
     >>> def hello(msg):
     ...     print msg
-    
+
     >>> class Test(Component):
     ...     rules(
     ...         X = lambda self: self.Y + 2
@@ -385,13 +385,13 @@ Components
     ...     Z = value(0)
     ...     def always(self):
     ...         print "always!"
-    ...     always = rule(always)    
+    ...     always = rule(always)
     ...     def only_on_request(self):
     ...         print "hello!"
     ...     only_on_request = optional(only_on_request)
     ...     A=optional(lambda s:hello("A!"))
     ...     rules(B=lambda s:hello("B!"))
-    
+
 
     >>> IsDiscrete(Test)
     {'A': False, 'B': False, 'always': False, 'only_on_request': False,
@@ -407,14 +407,14 @@ cells::
 
     >>> t.__cells__.keys()
     ['Y', 'always', 'Z', 'B', 'X']
-    
+
     >>> t.only_on_request
     hello!
 
     >>> t.A
     A!
     >>> t.A
-    
+
     >>> t.X
     2
     >>> t.Y = 23
@@ -435,7 +435,7 @@ cells::
     X = 2
 
     >>> t.__cells__.keys()
-    ['A', 'B', 'always', 'only_on_request', 'Y', 'X', 'Z']    
+    ['A', 'B', 'always', 'only_on_request', 'Y', 'X', 'Z']
 
     >>> del show_X
 
@@ -513,7 +513,7 @@ get_value/set_value methods::
     >>> c.set_value(99)
     >>> c1.get_value()
     99
-    
+
 
 Repeating, Polling, Recalc
 --------------------------
@@ -545,7 +545,7 @@ Repeating, Polling, Recalc
 
     >>> def hello(): print "c =", c.value
     >>> c1 = Cell(hello)
-    
+
     >>> Cell(c1.ensure_recalculation).value
     c = 99
 
@@ -567,7 +567,7 @@ Repeating, Polling, Recalc
     Traceback (most recent call last):
       ...
     RuntimeError: Already recalculated
-  
+
     >>> Cell().value = 1    # already calculated, no effect
 
     >>> c1.ensure_recalculation()
@@ -594,7 +594,7 @@ Repeating, Polling, Recalc
     >>> Cell().value = 16
     calculating
     c = 2
-    
+
     >>> Cell().value = 7
     calculating
     c = 3
@@ -620,14 +620,14 @@ And now the repeated polling of the now-vanished cell stops::
 
     >>> Cell().value = 66
     >>> c.value = 20
-    c = 20    
+    c = 20
 
 
 Discrete Processing
 -------------------
 
     >>> from peak.events import trellis
-    
+
     >>> class LineReceiver(Component):
     ...     bytes = receiver('')
     ...     delimiter = value('\r\n')
@@ -655,7 +655,7 @@ Discrete Processing
     >>> lp.bytes = '\r'
     >>> lp.bytes = '\n'
     Line: xyz
-    
+
     >>> lp.bytes = "abcdef\r\nghijkl\r\nmnopq"
     Line: abcdef
     Line: ghijkl
@@ -690,7 +690,7 @@ Multitasking
     Traceback (most recent call last):
       ...
     RuntimeError: resume() must be called from a @trellis.task
-   
+
     >>> def yielder(ob):
     ...     while not ob.bytes:
     ...         print "pausing"
@@ -725,7 +725,7 @@ Multitasking
     ...     yield 2
     ...     yield yielder(lp)
     ...     yield raiser()
-    
+
     >>> c = TaskCell(t)
     >>> c.value
     pausing
@@ -747,4 +747,242 @@ Multitasking
     True
 
     >>> del lp.__cells__    # break reference cycles before globals are cleared
+
+
+Dictionaries
+------------
+
+    >>> d = Dict({1:2}, a="b")
+    >>> d
+    {'a': 'b', 1: 2}
+
+    >>> hash(d)
+    Traceback (most recent call last):
+      ...
+    TypeError
+
+    >>> d.pop(1)
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+
+    >>> d.popitem()
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+
+    >>> d.setdefault(2, 4)
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+
+    >>> del d['a']
+    >>> d
+    {1: 2}
+
+    >>> def dump():
+    ...     for name in 'added', 'changed', 'deleted':
+    ...         if getattr(d,name):
+    ...             print name, '=', getattr(d,name)
+    >>> dump = Cell(dump)
+    >>> dump.value
+
+    >>> d[2] = 3
+    added = {2: 3}
+
+    >>> del d[1]
+    deleted = {1: 2}
+
+    >>> del d[42]
+    Traceback (most recent call last):
+      ...
+    KeyError: 42
+
+    >>> d[2] = "blue"
+    changed = {2: 'blue'}
+
+    >>> d.clear()
+    deleted = {2: 'blue'}
+
+    >>> d.update({1:2}, blue=2)
+    added = {'blue': 2, 1: 2}
+
+    >>> d.update({3:4})
+    added = {3: 4}
+
+    >>> d.update(blue='shoe')
+    changed = {'blue': 'shoe'}
+
+    >>> def go(): d[99] = 42; del d[99]
+    >>> modifier(go)()
+
+    >>> def go(): d[99] = 42; d[99] = 26
+    >>> modifier(go)()
+    added = {99: 26}
+
+    >>> def go(): del d[99]; d[99] = 42
+    >>> modifier(go)()
+    changed = {99: 42}
+
+    >>> def go(): d[99] = 71; del d[99]
+    >>> modifier(go)()
+    deleted = {99: 42}
+
+    >>> def go(): d[99] = 71; d[1] = 23; d.clear(); d.update({1:3}, a='b')
+    >>> modifier(go)()
+    added = {'a': 'b'}
+    changed = {1: 3}
+    deleted = {'blue': 'shoe', 3: 4}
+
+
+Lists
+-----
+
+    >>> L = List("abc")
+    >>> L
+    ['a', 'b', 'c']
+
+    >>> def dump():
+    ...     if L.changed:
+    ...         print "changed to", L
+    >>> dump = Cell(dump)
+    >>> dump.value
+
+    >>> hash(L)
+    Traceback (most recent call last):
+      ...
+    TypeError
+
+    >>> L.pop()
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+
+    >>> L.pop(0)
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+
+    >>> L.append(23)
+    changed to ['a', 'b', 'c', 23]
+
+    >>> L[1:2] = [3]
+    changed to ['a', 3, 'c', 23]
+
+    >>> del L[:3]
+    changed to [23]
+
+    >>> L[0] = 42
+    changed to [42]
+
+    >>> del L[0]
+    changed to []
+
+    >>> L += [1, 2]
+    changed to [1, 2]
+
+    >>> L *= 3
+    changed to [1, 2, 1, 2, 1, 2]
+
+    >>> del L[2:]
+    changed to [1, 2]
+
+    >>> L.reverse()
+    changed to [2, 1]
+
+    >>> L.remove(2)
+    changed to [1]
+
+    >>> L.insert(0, 88)
+    changed to [88, 1]
+
+    >>> L.extend( (423, -99) )
+    changed to [88, 1, 423, -99]
+
+    >>> L.sort()
+    changed to [-99, 1, 88, 423]
+
+
+Sets
+----
+
+    >>> try:
+    ...     s = set
+    ... except NameError:
+    ...     from sets import Set as set
+
+    >>> s = Set('abc')
+    >>> s
+    Set(['a', 'c', 'b'])
+
+    >>> hash(s)
+    Traceback (most recent call last):
+      ...
+    TypeError: Can't hash a Set, only an ImmutableSet.
+
+    >>> s.pop()
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+
+    >>> def dump():
+    ...     for name in 'added', 'removed':
+    ...         if getattr(s, name):
+    ...             print name, '=', list(getattr(s,name))
+    >>> dump = Cell(dump)
+    >>> dump.value
+
+    >>> s.clear()
+    removed = ['a', 'c', 'b']
+
+    >>> s.add(1)
+    added = [1]
+
+    >>> s.remove(1)
+    removed = [1]
+
+    >>> s.remove(2)
+    Traceback (most recent call last):
+      ...
+    KeyError: 2
+    
+    >>> s.symmetric_difference_update((1,2))
+    added = [1, 2]
+
+    >>> s.difference_update((2,3))
+    removed = [2]
+
+    >>> def go(): s.add(3); s.remove(3)
+    >>> modifier(go)()
+
+    >>> def go(): s.remove(1); s.add(1)
+    >>> modifier(go)()
+
+    >>> def go(): s.add(3); s.clear()
+    >>> modifier(go)()
+    removed = [1]
+
+    >>> def go(): ss=s; ss |= set([1,2]); ss &= set([2,3])
+    >>> modifier(go)()
+    added = [2]
+
+    >>> def go(): ss=s; s.remove(2); ss |= set([2, 3])
+    >>> modifier(go)()
+    added = [3]
+
+    >>> def go(): ss=s; ss |= set([4]); ss -= set([4, 2])
+    >>> modifier(go)()
+    removed = [2]
+
+    >>> s
+    Set([3])
+
+    >>> def go(): ss=s; s.remove(3); s.add(4); ss ^= set([3, 4])
+    >>> modifier(go)()
+
+    >>> s
+    Set([3])
+
+
+
 

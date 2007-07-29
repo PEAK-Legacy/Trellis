@@ -1,7 +1,11 @@
+from test_sets import *
+    
 def additional_tests():
-    import doctest
+    import doctest, sys
+    files = [
+        'README.txt', 'Internals.txt', 'Specification.txt'
+    ][sys.version<'2.4':]   # README.txt uses decorator syntax
     return doctest.DocFileSuite(
-        'README.txt', 'Internals.txt', 'Specification.txt',
-        optionflags=doctest.ELLIPSIS|doctest.NORMALIZE_WHITESPACE,
+        optionflags=doctest.ELLIPSIS|doctest.NORMALIZE_WHITESPACE, *files        
     )
 
