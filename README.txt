@@ -97,12 +97,21 @@ write conflict detection.  The Trellis also uses less memory for each cell
 (rule/value object), and offers many other features that either PyCells or
 Cellulose lack.
 
-Questions, discussion, and bug reports for this software should be directed to
-the PEAK mailing list; see http://www.eby-sarna.com/mailman/listinfo/PEAK/
-for details.
+The Trellis also boasts an extensive `Tutorial and Reference Manual`_, and
+can be `downloaded from the Python Package Index`_ or installed using
+`Easy Install`_.
 
+Questions, discussion, and bug reports for the Trellis should be directed to
+the `PEAK mailing list`_.
 
+.. _downloaded from the Python Package Index: http://pypi.python.org/pypi/Trellis#toc
+.. _Easy Install: http://peak.telecommunity.com/DevCenter/EasyInstall
+.. _PEAK mailing list: http://www.eby-sarna.com/mailman/listinfo/PEAK/
+.. _Tutorial and Reference Manual: http://peak.telecommunity.com/DevCenter/Trellis#toc
+
+.. _toc:
 .. contents:: **Table of Contents**
+
 
 ------------------------------
 Developer's Guide and Tutorial
@@ -571,7 +580,7 @@ A shared cell is a shared cell: it doesn't matter which "direction" you share
 it in!  It's a simple way to create an automatic link between two parts
 of your program, usually between a view or controller and a model.  For
 example, if you create a text editing widget for a GUI application, you can
-give it a value cell for the text in its class::
+define a value cell for the text in its class::
 
     >>> class TextEditor(trellis.Component):
     ...     text = trellis.value('')
@@ -599,145 +608,131 @@ simply link them together at runtime in any way that's useful.
 ----------------
 
 Receiver attributes are designed to "accept" what might be called events,
-messages, or commands.  But what if you want to *generate* them, instead?
+messages, or commands.  But what if you want to generate or transform such
+events instead?
+
+Let's look at an example.  Suppose you'd like to trigger an action whenever a
+new high temperature is seen::
+
+    >>> class HighDetector(trellis.Component):
+    ...     max = None
+    ...     value = trellis.value(0)
+    ...
+    ...     @trellis.rule
+    ...     def new_high(self):
+    ...         if self.max is None:
+    ...             self.max = self.value
+    ...         elif self.value > self.max:
+    ...             self.max = self.value
+    ...             return True
+    ...         return False
+    ...
+    ...     @trellis.rule
+    ...     def monitor(self):
+    ...         if self.new_high:
+    ...             print "New high"
+
+    >>> hd = HighDetector()
+
+    >>> hd.value = 7
+    New high
+
+    >>> hd.value = 9
+
+Oops!  We set a new high value, but the ``monitor`` rule didn't detect a new
+high, because ``new_high`` was *already True* from the previous high.
 
 Normal rules return what might be called "continuous" or "steady state" values.
 That is, their value remains the same until something causes them to be
-recalculated.
+recalculated.  In this case, the second recalculation returns ``True``, just
+like the first one...  meaning that there's no change, and no observer
+recalculation.
 
 But "discrete" rules are different.  Just like receivers, their value is
 automatically reset to a default value as soon as all their observers have
-"seen" the value.  Let's look at an example.
+"seen" the original value.  Let's try a discrete version of the same thing::
 
-Suppose you're writing some code that receives data from a socket, and you want
-to issue an event for each line of text that's been received over the socket.
-We can make a ``LineReceiver`` component that receives blocks of bytes, and
-emits lines one by one::
-
-    >>> class LineReceiver(trellis.Component):
-    ...     bytes = trellis.receiver('')
-    ...     delimiter = trellis.value('\r\n')
-    ...     _buffer = ''
+    >>> class HighDetector2(HighDetector):
+    ...     new_high = trellis.value(False) # <- the default value
     ...
-    ...     @trellis.discrete
-    ...     def line(self):
-    ...         buffer = self._buffer = self._buffer + self.bytes
-    ...         lines = buffer.split(self.delimiter, 1)
-    ...         self._buffer = lines.pop()
-    ...         if lines:
-    ...             trellis.repeat()    # flag this rule for recalculation
-    ...             return lines[0]
-    ...
-    ...     @trellis.rule
-    ...     def show(self):
-    ...         if self.line is not None:
-    ...             print "Line:", self.line
+    ...     @trellis.discrete       # <- instead of trellis.rule
+    ...     def new_high(self):
+    ...         if self.max is None:
+    ...             self.max = self.value
+    ...         elif self.value > self.max:
+    ...             self.max = self.value
+    ...             return True
+    ...         return False
 
-The ``@trellis.discrete`` decorator creates a discrete rule cell.  By default,
-it will reset to ``None`` after each calculation of a non-``None`` value.
-However, you can change this default value by defining a ``trellis.value()``
-for the same attribute.
+    >>> hd = HighDetector2()
 
-For example, we could have included a statement like ``trellis.values(line='')``
-in the ``LineReceiver`` class, to make the default value an empty string
-instead of ``None``.  Of course, if we did that, we'd also have to make the
-``line`` method return an empty string instead of implicitly returning ``None``
-when there is no line to emit.  But we don't want to do all that because we
-need to be able to receive *empty lines* from the socket.
+    >>> hd.value = 7
+    New high
 
-Thus, the default value for a discrete rule (or a receiver, for that matter),
-should always be something that can't possibly be a valid event or message.
-That way, rules reading the value can't mistake the default value for something
-that actually needs to be processed.
+    >>> hd.value = 9
+    New high
 
-Let's take a look at how our ``LineReceiver`` works, as it receives some
-bytes::
+    >>> hd.value = 3
 
-    >>> lp = LineReceiver()
-    >>> lp.bytes = 'xyz'
-    >>> lp.bytes = '\r'
-    >>> lp.bytes = '\n'
-    Line: xyz
+    >>> hd.value = 16
+    New high
 
-As you can see, the line is built up until a delimiter is found.  During that
-process, the ``line`` rule keeps returning ``None``, until it finally issues
-an actual value, causing the ``show`` rule to recalculate and print the output.
-We can also send multiple lines in a single input::
+As you can see, each new high is detected correctly now, because the value
+of ``new_high`` resets to ``False`` after it's calculated as anything else::
 
-    >>> lp.bytes = "abcdef\r\nghijkl\r\nmnopq"
-    Line: abcdef
-    Line: ghijkl
+    >>> hd.new_high
+    False
 
-Calling ``trellis.repeat()`` forces a rule to be recalculated as soon as the
-current recalculation pass is over.  (That is, after all observers have been
-updated.)  This enables us to keep producing new values in succession, but it
-must be used with caution, since an unconditional ``repeat()`` will produce
-an infinite loop.  In this case, we need it because we need to be able to
-produce more than two values in a row, e.g.::
+    >>> hd.new_high = True
+    New high
 
-    >>> lp.bytes = "FOObarFOObazFOOspam\n"
-    >>> lp.delimiter = "FOO"
-    Line: mnopq
-    Line: bar
-    Line: baz
+    >>> hd.new_high
+    False
 
-Notice that changing the delimiter caused the leftover ``mnopq`` to be
-processed as a FOO-delimited line, because the ``line`` rule depends on
-``delimiter``.  Thus, changing the delimiter causes an immediate
-re-interpretation of anything that's left in the buffer::
 
-    >>> lp.delimiter = "\n"
-    Line: spam
+Wiring Up Multiple Components
+-----------------------------
 
-Also notice that even if a discrete rule produces the same value on two
-successive recalculations, it is still treated as if its value had changed,
-triggering a recalculation of any observers.  Thus, if two lines in a row
-have the same value, both still get printed::
+Over the course of this tutorial, we've created a whole bunch of different
+objects, like the temperature converter, high detector, changeable rectangle,
+and a simple viewer.  Let's link them up together to make a rectangle that
+gets wider and taller whenever the Celsius temperature reaches a new high::
 
-    >>> lp.bytes = 'abc\nabc\n'
-    Line: abc
-    Line: abc
+    >>> tc = TempConverter()
+    Celsius...... 0
+    Fahrenheit... 32
 
-This is a particularly important difference between discrete rules and regular
-ones.  Always use a discrete rule when you want to produce values that are
-processed indepdendently of any previous value for that rule.  Discrete rules
-are also especially appropriate for filtering or transforming events or
-commands received from ``receiver`` cells.
+    >>> hd = HighDetector2(value = trellis.Cells(tc)['C'])
+    >>> cr = ChangeableRectangle(
+    ...     wider  = trellis.Cells(hd)['new_high'],
+    ...     taller = trellis.Cells(hd)['new_high'],
+    ... )
 
-By the way, you may not have realized this, but we can create a ``LineReceiver``
-that shares its ``bytes`` cell with say, an object like this::
+    >>> viewer = Viewer(model = cr)
+    Rectangle((0, 0), (20, 30), (20, 30))
 
-    >>> class StreamReceiver(trellis.Component):
-    ...     trellis.values(
-    ...         socket = None,
-    ...         buffer_size = 512,
-    ...         bytes = '',
-    ...     )
-    ...     @trellis.discrete
-    ...     def bytes(self):
-    ...         trellis.poll()  # repeat this rule if anybody asks about it
-    ...         return self.socket.recv(self.buffer_size)
+    >>> tc.F = -40
+    Celsius...... -40.0
+    Fahrenheit... -40
 
-Notice that here we define a default value of ``''`` for the ``bytes``
-rule, so that repeatedly receiving zero bytes doesn't trigger any observers to
-recalculate.  We also see here the use of another trellis API, ``poll()``,
-which marks the rule to be recalculated if an observer asks for its value.
-(``poll()`` and ``repeat()`` are both covered in more detail in the section
-below on `Recalculation and Dependency Management`_.)
+    >>> tc.F = 50
+    Celsius...... 10.0
+    Fahrenheit... 50
+    New high
+    Rectangle((0, 0), (21, 31), (21, 31))
 
-This isn't really the best way to repeatedly read a socket, of course.  You're
-better off using an async I/O library like Twisted and registering a callback
-to set the ``bytes`` receiver for you.  But it serves well enough to illustrate
-the basic idea of chaining discrete rules.  With our ``StreamReceiver``, we can
-then do something like this::
+Crazy, huh?  None of these components were designed with any of the others in
+mind, but because they all "speak Trellis", you can link them up like building
+blocks to do new and imaginative things.
 
-    stream = StreamReceiver(socket = aNonBlockingSocket)
-    lines = LineReceiver(bytes = trellis.Cells(stream)['bytes'])
+By the way, although in this demonstration we saw the three outputs in one
+particular order, in general the Trellis does not guarantee what order rules
+will be recalculated in, so it's unwise to assume that your program will
+always produce results in a certain order, unless you've taken steps to ensure
+that it will.
 
-In order to create a line receiver that gets its bytes from a socket.  However,
-unlike Twisted deferreds (which pass a value to only one recipient at a time),
-a shared receiver setup like this lets you have multiple rules "reading" from
-the same stream at the same time.
+That's why managing the order of Trellis output (and dealing with state changes
+in general) is the subject of our next major section.
 
 
 Managing State Changes
@@ -769,7 +764,7 @@ finished.
 The Trellis actually does the same thing, but its internal "event queue" is
 automatically flushed whenever you set a value from outside a rule.  If you
 want to set multiple values, you need to use a ``@modifier`` function or
-method::
+method like this one, which we could've made a Rectangle method, but didn't::
 
     >>> @trellis.modifier
     ... def set_position(rectangle, left, top):
@@ -799,9 +794,9 @@ effect"::
     Rectangle((55, 22), (18, 10), (73, 32))
     Rectangle((22, 55), (18, 10), (40, 65))
 
-Notice that although the ``set_position`` set new values for ``.left`` and
-``.top``, it printed the *old* values for those attributes!  In other words,
-it's not just the notification of observers that's delayed, the actual
+Notice that although the ``set_position`` had just set new values for ``.left``
+and ``.top``, it printed the *old* values for those attributes!  In other
+words, it's not just the notification of observers that's delayed, the actual
 *changes* are delayed, too.
 
 Why?  Because the whole point of a ``modifier`` is that it makes all its
@@ -889,11 +884,12 @@ For example, in the ``TempConverter`` demo, we had a rule that printed the
 Celsius and Fahrenheit temperatures.  If we'd put those two ``print``
 statements in separate rules, we'd have had no control over the output order;
 either Celsius or Fahrenheit might have come first on any given change to the
-temperatures.  So, if you care about the order of output or action, put it all
-in one rule.  If that makes the rule too big or complex, you can always
-refactor to extract new rules to calculate the intermediate values.  Just don't
-put any of the *actions* (i.e. side-effects or outputs) in the other rules,
-only the *calculations*.
+temperatures.  So, if you care about the relative order of certain output or
+actions, you must put them all in one rule.  If that makes the rule too big or
+complex, you can always refactor to extract new rules to calculate the
+intermediate values.  Just don't put any of the *actions* (i.e. side-effects or
+outputs) in the other rules, only the *calculations*.  Then have a rule that
+*only* does the output or actions.
 
 
 Rule 2 - Return Values, Don't Set Them
@@ -913,12 +909,12 @@ other data structure, then make other rules that pull the values out.  E.g.::
 
 In other words, there's no need to write an ``UpdateFooBar`` method that
 computes and sets ``foo`` and ``bar``, the way you would in a callback-based
-system.  Remember: rules are not callbacks.  So always *return* values instead
+system.  Remember: rules are not callbacks!  So always *return* values instead
 of *assigning* values.
 
 
-Rule 3 - If You MUST Set, Do It Only Once
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Rule 3 - If You MUST Set, Do It From One Place or With One Value
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you set a value from more than one place, you are introducing an order
 dependency.  In fact, if you set a value more than once in a rule or modifier,
@@ -951,10 +947,10 @@ never have this problem.
 Of course, if all of your code is setting a cell to the *same* value, you won't
 get a conflict error either.  This is mostly useful for e.g. receiver cells
 that represent a command the program should do.  If you have GUI input code
-that triggers the command by setting the receiver to ``True`` whenever that
+that triggers a command by setting some receiver to ``True`` whenever that
 command is selected from a menu, invoked by a keyboard shorcut, or accessed
 with a toolbar button click, then it doesn't matter which event happens or
-even if all three could somehow happen at the same time, since the end result
+even if all three could somehow happen at the same time, because the end result
 is exactly the same: the receiver processes the ``True`` message once and then
 discards it.
 
@@ -1056,7 +1052,7 @@ Also note, however, that you cannot use the ``.pop()``, ``.popitem()``, or
     Traceback (most recent call last):
       ...
     InputConflict: Can't read and write in the same operation
-    
+
 Remember: the trellis wants all changes to be deferred until the next
 recalculation.  That means you can't see the effect of a change in the same
 moment during which you *make* the change, so operations like ``pop()`` are
@@ -1112,7 +1108,7 @@ Note, however, that you cannot use the ``.pop()`` method of ``Set`` objects::
     Traceback (most recent call last):
       ...
     InputConflict: Can't read and write in the same operation
-    
+
 Remember: the trellis wants all changes to be deferred until the next
 recalculation.  That means you can't see the effect of a change in the same
 moment during which you *make* the change, so operations like ``pop()`` are
@@ -1120,7 +1116,7 @@ disallowed, because they would have to return the same value no matter how
 many times you called it during the same recalculation!  (Otherwise, the
 change hasn't really been deferred.)
 
-    
+
 trellis.List
 ------------
 
@@ -1144,7 +1140,7 @@ list, except that it can be observed by rules::
 
     >>> myList.sort()
     [1, 2, 3, 4]
-    
+
 ``trellis.List`` objects also have a receiver attribute called ``changed``.
 It's normally false, but is temporarily ``True`` during the recalculation
 triggered by a change to the list.  But as with all receiver attributes, you'll
@@ -1176,7 +1172,7 @@ Note, however, that you cannot use the ``.pop()`` method of ``List`` objects::
     Traceback (most recent call last):
       ...
     InputConflict: Can't read and write in the same operation
-    
+
 Remember: the trellis wants all changes to be deferred until the next
 recalculation.  That means you can't see the effect of a change in the same
 moment during which you *make* the change, so operations like ``pop()`` are
@@ -1203,26 +1199,32 @@ in a sorted order and issuing change events.
 Creating Your Own Data Structures
 ---------------------------------
 
-@todo/todo(func), todos(**attrs)
+XXX This section isn't written yet
+
+@todo/todo(func), todos(\**attrs)
     Define one or more todo-cell attributes, that can send "messages to the
     future"
 
 .future
+    Define an attribute that accesses a todo-cell's future value
 
 dirty()
+    Force the current rule's return value to be treated as if it changed, so
+    that you can update a data structure in place from your "todo" attributes.
 
 
-Things To Do With A Trellis
-===========================
+Other Things You Can Do With A Trellis
+======================================
 
-MVC/Live UI Updates
-Testable UI Models
-Live Object Validation
-Persistence/ORM
-Async I/O
-Process Monitoring
-Live Business Statistics
+XXX This section isn't written yet and should include examples
 
+* MVC/Live UI Updates
+* Testable UI Models
+* Live Object Validation
+* Persistence/ORM
+* Async I/O
+* Process Monitoring
+* Live Business Statistics
 
 
 
@@ -1234,25 +1236,29 @@ Advanced Features and API Details
 Working With Cell Objects
 =========================
 
+XXX This section isn't written yet
+
 * no value makes a read-only cell
 
 * read-only cells become constant
 
-__cells__ attribute
+* __cells__ attribute
 
-Cell, Constant
+* Cell, Constant
 
-.link
+* .link
 
-.value
+* .value
 
-.get_value()
+* .get_value()
 
-.set_value(value)
+* .set_value(value)
 
 
 Recalculation and Dependency Management
 =======================================
+
+XXX This section isn't written yet
 
 modifier(method)
     Mark a method as performing modifications to Trellis data
@@ -1266,8 +1272,8 @@ repeat()
 dirty()
     Force the current rule's return value to be treated as if it changed
 
-without_observer(func, *args, **kw)
-    Run func(*args, **kw) without making the current rule depend on it
+without_observer(func, \*args, \**kw)
+    Run func(\*args, \**kw) without making the current rule depend on it
 
 .ensure_recalculation()
     Ensure that this cell's rule will be (re)calculated
@@ -1276,16 +1282,50 @@ without_observer(func, *args, **kw)
 Co-operative Multitasking
 =========================
 
-@task, Pause, Value, resume(), TaskCell
+XXX @task, Pause, Value, resume(), and TaskCell
 
 
 Cell Metadata
 =============
 
+XXX CellRules, CellValues, CellFactories, IsOptional, and IsDiscrete
+
 
 Garbage Collection
 ==================
 
+Cells keep strong references to all of the cells whose values they accessed
+during rule calculation, and weak references to all of the cells that accessed
+them.  This ensures that as long as an observer exists, its most-recently
+observed subject(s) will also continue to exist.
+
+Cells whose rules are effectively methods (i.e., cells that represent component
+attributes) also keep a strong reference to the object that owns them, by
+way of the method's ``im_self`` attribute.  This means that as long as some
+attribute of a component is being observed, the component will continue to
+exist.
+
+In addition, a component's ``__cells__`` dictionary keeps a reference to all
+its cells, creating a reference cycle between the cells and the component.
+Thus, Component instances can only be reclaimed by Python's cycle collector,
+and are not destroyed as soon as they go out of scope.  You should therefore
+avoid giving Component objects a ``__del__`` method, and should explicitly
+dispose of any resources that you want to reclaim early.
+
+You should NOT, however, attempt to break the cycle between a component and its
+cells.  If the cells have any observers, this will just cause the rules to
+break upon recalculation, or else recreate some of the cells, depending on how
+you tried to break the cycle.  It's better to simply let Python detect the
+cycle and get rid of it itself.
+
+However, if you absolutely MUST mess with this, the best thing to do is delete
+the component's ``__cells__`` attribute with ``del ob.__cells__``, as this will
+ensure that any dangling observers will at least get attribute errors when
+recalculation occurs.  Thus, if the component is really still in use, at least
+you'll get an error message, instead of weird results.  But it still won't be a
+fun problem to debug, so it's highly recommended that you leave the garbage
+collection to Python.  Python always knows more about what's happening in your
+program than you do!
 
 
 ----------
@@ -1376,11 +1416,52 @@ time, virtually all of the work since has been generously funded by OSAF, the
 Open Source Applications Foundation.
 
 
-Todo/Ideas
-==========
+Roadmap
+=======
 
-Trellis
-  * .has_listeners(), .has_dependencies()
+Open Issues
+  * Debugging code that does modifications is difficult, due in part to the
+    fact that printing a cell can change its state, and in part to the fact
+    that it's hard to know what cells are what.  There should be a way to give
+    cells an identifier, so you know what you're looking at.
+
+  * Coroutine/task rules and discrete rules are somewhat unintuitive as to
+    their results.  It's not easy to tell when you should ``poll()`` or
+    ``repeat()``, especially since things will sometimes *seem* to work without
+    them.  In particular, we probably need a way to return *multiple* values
+    from a rule via an output queue.  That way, a discrete rule or task's
+    recalculation can be separated from mere outputting of queued values.
+
+  * Errors in rules can currently clog up the processing of rules that observe
+    them.  Ideally, errors should cause a rollback of the entire recalculation,
+    or at least the parts that were affected by an error, so that the next
+    recalculation will begin from the pre-error state.
+
+  * Currently, there's no protection against accessing Cells from other
+    threads, nor support for having different logical tasks in the same thread
+    with their own contexts, services, etc.  This should be fixed by using
+    the "Contextual" library to manage thread-local (and task-local) state for
+    the Trellis, and by switching to the appropriate ``context.State`` whenever
+    non-rule/non-modifier code tries to read or write a cell.  If combined with
+    a lockable cell controller, and the rollback capability mentioned above,
+    this would actually allow the Trellis to become an STM system -- a Software
+    Transactional Memory.
+
+  * There should probably be a way to tell if a Cell ``.has_listeners()`` or
+    ``.has_dependencies()``.  This will likely become important for TrellisIO,
+    if not TrellisDB.
+
+TrellisDB
+  * A system for processing relational-like records and "active queries" mapped
+    from zero or more backend storage mechanism.
+
+TrellisUI
+  * Framework for mapping application components to UI views.
+
+  * Widget specification, styling, and layout system that's backend-agnostic,
+    ala Adobe's "Eve2" layout constraint system.  Should be equally capable of
+    spitting out text-mode drawings of a UI, as it is of managing complex wx
+    "GridBagSizer" layouts.
 
 TrellisIO
   * Time service & timestamp rules
@@ -1390,4 +1471,5 @@ TrellisIO
   * Cross-thread bridge cells
 
   * signal() events
+
 
