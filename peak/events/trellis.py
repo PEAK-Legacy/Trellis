@@ -7,7 +7,8 @@ __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
     'discrete', 'repeat', 'poll', 'without_observer', 'InputConflict',
-    'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Value', 'TaskCell'
+    'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Value', 'TaskCell',
+    'dirty',
 ]
 
 _states = {}
@@ -35,7 +36,6 @@ class Mailbox(object):
     def __init__(self, owner, *args):
         self.owner = ref(owner)
         self.dependencies = list(args)
-
 
 
 
@@ -87,71 +87,68 @@ class ReadOnlyCell(object):
         if pulse is self._version:
             # We are already up to date, indicate whether we've changed
             return pulse is self._changed_as_of
-
         self._version = pulse   # Ensure circular rules terminate
-
-        new = self._writebuf
-        if new is not _sentinel:
-            # We were assigned a value in the previous pulse
-            self._writebuf = _sentinel
-            have_new = True
-        else:
-            have_new = False
-            if self._rule:
-                # We weren't assigned a value, see if we need to recalc
-                for d in self._mailbox.dependencies:
-                    if (not d or d._changed_as_of is pulse
-                         or d._version is not pulse and d._check_dirty(state)
-                    ):  # one of our dependencies changed, recalc
-                        self._mailbox = m = Mailbox(self)  # break old deps
-                        state[1] = self    # we are the observer while calc-ing
-                        try:
+        state[1] = self    # we are the observer while calculating/comparing
+        try:
+            new = self._writebuf
+            if new is not _sentinel:
+                # We were assigned a value in the previous pulse
+                self._writebuf = _sentinel
+                have_new = True
+            else:
+                have_new = False
+                if self._rule:
+                    # We weren't assigned a value, see if we need to recalc
+                    for d in self._mailbox.dependencies:
+                        if (not d or d._changed_as_of is pulse
+                             or d._version is not pulse and d._check_dirty(state)
+                        ):  # one of our dependencies changed, recalc
+                            self._mailbox = m = Mailbox(self)  # break old deps
                             new = self._rule()
                             have_new = True
                             if not m.dependencies and self._can_freeze:
                                 have_new = _sentinel    # flag for freezing
-                            break
-                        finally:
-                            state[1] = observer # put back the old observer
+                            break   
+            if have_new:
+                previous = self._current_val
+                if self._reset is not _sentinel and new is not self._reset:
+                    # discrete cells are always "changed" if new non-reset value
+                    previous = self._reset
+                    ctrl.change(self)  # make sure we have a chance to reset
+            elif self._reset is not _sentinel:
+                # discrete cells reset if there's no new value set or calc'd
+                new = self._reset
+                previous = self._current_val
+                have_new = (new != previous)
+    
+            else:
+                # No new value and not discrete?  Then no change.
+                return False
+    
+            # We have a new value, but has it actually changed?
+            if new is not previous and new != previous:
+    
+                # Yes, update our state and notify listeners
+                self._current_val = new
+                self._changed_as_of = pulse
+                notify = ctrl.notify
+    
+                for c in self._listeners:
+                    c = c()
+                    if c is not None:
+                        c = c.owner()
+                        if c is not None and c._version is not pulse:
+                            notify(c)
+                            
+            if have_new is _sentinel:
+                # We no longer have any dependencies, so turn Constant
+                self._mailbox = self._listeners = self._rule = None
+                self.__class__ = self._const_type or Constant
+    
+            return have_new
 
-        if have_new:
-            previous = self._current_val
-            if self._reset is not _sentinel and new is not self._reset:
-                # discrete cells are always "changed" if new non-reset value
-                previous = self._reset
-                ctrl.change(self)  # make sure we have a chance to reset
-
-        elif self._reset is not _sentinel:
-            # discrete cells reset if there's no new value set or calc'd
-            new = self._reset
-            previous = self._current_val
-            have_new = (new != previous)
-
-        else:
-            # No new value and not discrete?  Then no change.
-            return False
-
-        # We have a new value, but has it actually changed?
-        if new is not previous and new != previous:
-
-            # Yes, update our state and notify listeners
-            self._current_val = new
-            self._changed_as_of = pulse
-            notify = ctrl.notify
-
-            for c in self._listeners:
-                c = c()
-                if c is not None:
-                    c = c.owner()
-                    if c is not None and c._version is not pulse:
-                        notify(c)
-                        
-        if have_new is _sentinel:
-            # We no longer have any dependencies, so turn Constant
-            self._mailbox = self._listeners = self._rule = None
-            self.__class__ = self._const_type or Constant
-
-        return have_new
+        finally:
+            state[1] = observer # put back the old observer
 
 
     def __repr__(self):
@@ -159,6 +156,9 @@ class ReadOnlyCell(object):
         return "%s(%r, %r%s)" % (
             self.__class__.__name__, self._rule, self.value, e
         )
+
+
+
 
 
 
@@ -439,13 +439,13 @@ def poll():
     else:
         raise RuntimeError("poll() must be called from a rule")
 
+def dirty():
+    """Force the current rule's return value to be treated as if it changed"""
+    current_observer()._current_val = _sentinel
 
 def discrete(func):
     """Define a discrete rule attribute"""
     return _discrete(func, __frame=sys._getframe(1))
-
-
-
 
 
 
@@ -701,12 +701,13 @@ class Dict(UserDict.IterableUserDict, Component):
         if data is None:
             data = {}
         if self.deleted:
+            dirty()
             for key in self.deleted:
                 del data[key]
         if self.added:
-            data.update(self.added)
+            dirty(); data.update(self.added)
         if self.changed:
-            data.update(self.changed)
+            dirty(); data.update(self.changed)
         return data    
 
     decorators.decorate(modifier)    
@@ -734,7 +735,6 @@ class Dict(UserDict.IterableUserDict, Component):
         self.to_add.clear()
         self.to_change.clear()
         self.to_delete.update(self.data)
-
 
     decorators.decorate(modifier)    
     def update(self, d=(), **kw):
@@ -911,7 +911,6 @@ class Set(sets.Set, Component):
     you read from the set is "in the present" -- so you can't see the effect of
     any changes until the next Trellis recalculation.
     """
-
     added = todo(lambda self: set())
     removed = todo(lambda self: set())
 
@@ -932,10 +931,11 @@ class Set(sets.Set, Component):
         if data is None:
             data = {}
         if self.removed:
+            dirty()
             for item in self.removed:
                 del data[item]
         if self.added:
-            data.update(dict.fromkeys(self.added, True))
+            dirty(); data.update(dict.fromkeys(self.added, True))
         return data
 
     def __setstate__(self, data):

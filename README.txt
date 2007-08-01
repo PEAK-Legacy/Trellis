@@ -402,7 +402,7 @@ anything:
 
 To be able to observe mutable data structures, you need to use data types like
 ``trellis.Dict`` and ``trellis.List`` instead of the built-in Python types.
-We'll cover how that works in the section below on `Sets, Lists, and Dicts`_.
+We'll cover how that works in the section below on `Mutable Data Structures`_.
 
 By the way, the links from a cell to its observers are defined using weak
 references.  This means that views (and cells or components in general) can
@@ -743,26 +743,473 @@ the same stream at the same time.
 Managing State Changes
 ======================
 
+Time is the enemy of event-driven programs.  They say that time is "nature's
+way of keeping everything from happening at once", but in event-driven programs
+we usually *want* certain things to happen "at once"!
+
+For example, suppose we want to change a rectangle's top and left
+co-ordinates::
+
+    >>> r.top = 66
+    Rectangle((25, 66), (18, 10), (43, 76))
+
+    >>> r.left = 53
+    Rectangle((53, 66), (18, 10), (71, 76))
+
+Oops!  If we were updating a GUI like this, we would see the rectangle move
+first down and then sideways, instead of just going to where it belongs in one
+movement.
+
+Therefore, in most practical event-driven systems, certain kinds of changes
+are automatically deferred, usually by adding them to some kind of event queue
+so that they can happen later, after all the desired changes have happened.
+That way, they don't take effect until the current event is completely
+finished.
+
+The Trellis actually does the same thing, but its internal "event queue" is
+automatically flushed whenever you set a value from outside a rule.  If you
+want to set multiple values, you need to use a ``@modifier`` function or
+method::
+
+    >>> @trellis.modifier
+    ... def set_position(rectangle, left, top):
+    ...     rectangle.left = left
+    ...     rectangle.top = top
+
+    >>> set_position(r, 55, 22)
+    Rectangle((55, 22), (18, 10), (73, 32))
+
+Changes made by a ``modifier`` function do not take effect until the current
+recalculation sweep is completed, which will be no sooner than the *outermost*
+active ``modifier`` function returns.  (In other words, if one ``modifier``
+calls another ``modifier``, the inner modifier's changes don't take effect
+until the same time as the outer modifier's changes do.)
+
+Now, pay close attention to what this delayed update process means.  When
+we say "changes don't take effect", we *really* mean, "changes don't take
+effect"::
+
+    >>> @trellis.modifier
+    ... def set_position(rectangle, left, top):
+    ...     rectangle.left = left
+    ...     rectangle.top = top
+    ...     print rectangle
+
+    >>> set_position(r, 22, 55)
+    Rectangle((55, 22), (18, 10), (73, 32))
+    Rectangle((22, 55), (18, 10), (40, 65))
+
+Notice that although the ``set_position`` set new values for ``.left`` and
+``.top``, it printed the *old* values for those attributes!  In other words,
+it's not just the notification of observers that's delayed, the actual
+*changes* are delayed, too.
+
+Why?  Because the whole point of a ``modifier`` is that it makes all its
+changes *at the same time*.  If the changes actually took effect one by one
+as you made them, then they wouldn't be happening "at the same time".
+
+In other words, there would be an order dependency -- the very thing we want
+to **get rid of**.
 
 
+The Evil of Order Dependency
+----------------------------
 
-Sets, Lists, and Dicts
-----------------------
+The reason that time is the enemy of event driven programs is because time
+implies order, and order implies order dependency -- a major source of bugs
+in event-driven and GUI programs.
 
-Set, List, Dict
+Writing a polished GUI program that has no visual glitches or behavioral quirks
+is difficult *precisely* because such things are the result of changes in the
+order that events occur in.
+
+Worse still, the most seemingly-minor change to a previously working version of
+such a program can introduce a whole slew of new bugs, making it hard to
+predict how long it will take to implement new features.  And as a program
+gets more complex, even fixing bugs can introduce new bugs!
+
+Indeed, Adobe Systems Inc. estimates that nearly *half* of all their reported
+desktop application bugs (across all their applications!) are caused by such
+event-management problems.
+
+So a major goal of the Trellis' is to not only **wipe out** these kinds of
+bugs, but to prevent most of them from happening in the first place.
+
+And all you have to do to get the benefits, is to divide your code three ways:
+
+* Input code, that sets trellis cells or calls modifier methods (but does not
+  run inside trellis rules)
+
+* Processing rules that compute values, but do not directly change any other
+  cells
+
+* Output code, that neither set values nor compute them, but simply sends data
+  on to other systems (like the screen, a socket, a database, etc.).  This code
+  may appear in standalone trellis rules, or it can be "application" code that
+  reads results from a finished trellis calculation.
+
+The first and third kinds of code are inherently order-dependent, since
+information comes in (and must go out) in a meaningful order.  However, by
+putting related outputs in the same output-only rule (or non-rule code), you
+can ensure that the required order is enforced by a single piece of code.  This
+approach is highly bug-resistant.
+
+Second, you can reduce the order dependency of input code by making it do as
+little as possible, simply dumping data into input cells, where they can be
+handled by processing rules.  And, since input controllers can be very generic
+and highly-reusable, there's a natural limit to how much input code you will
+need.
+
+By using these approaches, you can maximize the portion of your application
+that appears in side effect-free processing rules, which the Trellis makes 100%
+immune to order dependencies.  Anything that happens in Trellis rules, happens
+*instantaneously*.  There is no "order", and thus no order dependency.
+
+In truth, of course, rules do execute in *some* order.  However, as long as the
+rules don't do anything but compute their own values, then it cannot matter
+what order they do it in.  (The trellis guarantees this by automatically
+recalculating rules when they are read, if they aren't already up-to-date.)
 
 
+The Side-Effect Rules
+---------------------
 
-InputConflict
+To sum up the recommended approach to handling side-effects in Trellis-based
+programs, here are a few brief guidelines that will keep your code easy to
+write, understand, and debug.
 
-modifier(method)
-    Mark a method as performing modifications to Trellis data
+
+Rule 1 - If Order Matters, Use Only One Rule
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If you care what order two "outside world" side-effects happen in, code them
+both in the same rule.
+
+For example, in the ``TempConverter`` demo, we had a rule that printed the
+Celsius and Fahrenheit temperatures.  If we'd put those two ``print``
+statements in separate rules, we'd have had no control over the output order;
+either Celsius or Fahrenheit might have come first on any given change to the
+temperatures.  So, if you care about the order of output or action, put it all
+in one rule.  If that makes the rule too big or complex, you can always
+refactor to extract new rules to calculate the intermediate values.  Just don't
+put any of the *actions* (i.e. side-effects or outputs) in the other rules,
+only the *calculations*.
+
+
+Rule 2 - Return Values, Don't Set Them
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Except for output rules that are updating other systems, rule should always
+*compute* a value, rather than changing other values.  If you need to compute
+more than one thing at once, just make a rule that returns a tuple or some
+other data structure, then make other rules that pull the values out.  E.g.::
+
+    >>> class Example(trellis.Component):
+    ...     trellis.rules(
+    ...         _foobar = lambda self: (1, 2),
+    ...         foo = lambda self: self._foobar[0],
+    ...         bar = lambda self: self._foobar[1]
+    ...     )
+
+In other words, there's no need to write an ``UpdateFooBar`` method that
+computes and sets ``foo`` and ``bar``, the way you would in a callback-based
+system.  Remember: rules are not callbacks.  So always *return* values instead
+of *assigning* values.
+
+
+Rule 3 - If You MUST Set, Do It Only Once
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If you set a value from more than one place, you are introducing an order
+dependency.  In fact, if you set a value more than once in a rule or modifier,
+the Trellis will stop you.  After all, all changes in a rule or modifier happen
+"at the same time".  And what would it mean to set a value to 22 and 33 "at the
+same time"?  A conflict error, that's what it would mean::
+
+    >>> @trellis.modifier
+    ... def set_twice():
+    ...     set_position(r, 22, 55)
+    ...     set_position(r, 33, 66)
+
+    >>> set_twice()
+    Traceback (most recent call last):
+      ...
+    InputConflict: (22, 33)
+
+This rule is for your protection, because it makes it impossible for you to
+accidentally set the same thing in two different places in response to an
+event, and then miss the bug or be unable to reproduce it because the second
+change masks the first!
+
+Instead, what happens is that assigning two different values to the same cell
+in response to the same event always produces an error message, making it
+easier to find the problem.  Of course, if you arrange your input code so that
+only one piece of input code is setting trellis values for a given event, and
+you don't change values from inside of computations (rule 2 above), then you'll
+never have this problem.
+
+Of course, if all of your code is setting a cell to the *same* value, you won't
+get a conflict error either.  This is mostly useful for e.g. receiver cells
+that represent a command the program should do.  If you have GUI input code
+that triggers the command by setting the receiver to ``True`` whenever that
+command is selected from a menu, invoked by a keyboard shorcut, or accessed
+with a toolbar button click, then it doesn't matter which event happens or
+even if all three could somehow happen at the same time, since the end result
+is exactly the same: the receiver processes the ``True`` message once and then
+discards it.
+
+
+Mutable Data Structures
+=======================
+
+So far, all of our Trellis examples have worked with atomic cell values, like
+integers, strings, and so forth.  We've avoided working with lists, sets,
+dictionaries, and similar structures, because the standard Python
+implementations of these types can't be "observed" by rules, which means that
+they won't be automatically updated.
+
+But this doesn't mean you can't use sets, lists, and dictionaries.  You just
+need to use Trellis-ized ones.  Of course, all the warnings above about
+changing values still apply; just because you're modifying something other
+than attributes, doesn't mean you're not still modifying things!
+
+The Trellis package provides three mutable types for you to use in your
+components: ``Set``, ``List``, and ``Dict``.  You can also subclass them or
+create your own mutable types, as we'll discuss in a later section.
+
+
+trellis.Dict
+------------
+
+The ``trellis.Dict`` type looks pretty much like any dictionary, but it can
+be observed by rules.  Any change to the dictionary's contents will result
+in its observers being recalculated.  For example, if we use our ``view``
+object (defined way back in the section on `Model-View-Controller and the
+"Observer" Pattern`_), we can print it whenever it changes, no matter how it
+changes::
+
+    >>> d = trellis.Dict(a=1)
+    >>> view.model = d
+    {'a': 1}
+
+    >>> del d['a']
+    {}
+
+    >>> d['a'] = 2
+    {'a': 2}
+
+Unlike normal values, however, even changing a dictionary entry to the same
+value will trigger a recalculation::
+
+    >>> d['a'] = 2
+    {'a': 2}
+
+This is because the ``Dict`` type doesn't try to compare the values you put
+into it.  If you need to prevent such recalculations from happening, you can
+always check the dictionary contents first, or create a subclass and override
+``__setitem__`` (but be sure to read the section on `Creating Your Own Data
+Structures`_ for some important information first).
+
+In addition to these basic features, the ``Dict`` type provides three receiver
+attributes (``added``, ``changed``, and ``deleted``) that reflect changes
+currently in progress.  Ordinarily, they are empty dictionaries, but while a
+change is taking place they temporarily become non-empty.  For example::
+
+    >>> view.model = None
+
+    >>> @trellis.Cell
+    ... def dump():
+    ...     for name in 'added', 'changed', 'deleted':
+    ...         if getattr(d, name):
+    ...             print name, '=', getattr(d, name)
+    >>> dump.value
+
+    >>> del d['a']
+    deleted = {'a': 2}
+
+    >>> d[3] = 4
+    added = {3: 4}
+
+    >>> d[3] = 5
+    changed = {3: 5}
+
+    >>> @trellis.modifier
+    ... def two_at_once():
+    ...     del d[3]
+    ...     d[4] = 5
+
+    >>> two_at_once()
+    added = {4: 5}
+    deleted = {3: 5}
+
+These dictionaries immediately reset to empty as soon as a change has been
+fully processed, so you'll never see anything in them if you look from non-rule
+code::
+
+    >>> d.added
+    {}
+
+Also note, however, that you cannot use the ``.pop()``, ``.popitem()``, or
+``.setdefault()`` methods of ``Dict`` objects::
+
+    >>> d.setdefault(1, 2)
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+    
+Remember: the trellis wants all changes to be deferred until the next
+recalculation.  That means you can't see the effect of a change in the same
+moment during which you *make* the change, so operations like ``pop()`` are
+disallowed, because they would have to return the same value no matter how
+many times you called it during the same recalculation!  (Otherwise, the
+change hasn't really been deferred.)
+
+This limitation also applied to the ``pop()`` method of ``List`` and ``Set``
+objects, as we'll see in the next two sections.
+
+
+trellis.Set
+-----------
+
+Trellis ``Set`` objects offer nearly all the comforts of the Python standard
+library's ``sets.Set`` objects (minus ``.pop()``, and support for sets of
+mutable sets), but with observability::
+
+    >>> s = trellis.Set("abc")
+    >>> view.model = s
+    Set(['a', 'c', 'b'])
+
+    >>> s.add('d')
+    Set(['a', 'c', 'b', 'd'])
+
+    >>> s.remove('c')
+    Set(['a', 'b', 'd'])
+
+    >>> s -= trellis.Set(['a', 'b'])
+    Set(['d'])
+
+Similar to the ``Dict`` type, the ``Set`` type offers receiver set attributes,
+``added`` and ``removed``, that reflect changes-in-progress to the set::
+
+    >>> view.model = None
+
+    >>> @trellis.Cell
+    ... def dump():
+    ...     for name in 'added', 'removed':
+    ...         if getattr(s, name):
+    ...             print name, '=', list(getattr(s, name))
+    >>> dump.value
+
+    >>> s.add('a')
+    added = ['a']
+
+    >>> s.remove('d')
+    removed = ['d']
+
+Note, however, that you cannot use the ``.pop()`` method of ``Set`` objects::
+
+    >>> s.pop()
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+    
+Remember: the trellis wants all changes to be deferred until the next
+recalculation.  That means you can't see the effect of a change in the same
+moment during which you *make* the change, so operations like ``pop()`` are
+disallowed, because they would have to return the same value no matter how
+many times you called it during the same recalculation!  (Otherwise, the
+change hasn't really been deferred.)
+
+    
+trellis.List
+------------
+
+A ``trellis.List`` looks and works pretty much the same as a normal Python
+list, except that it can be observed by rules::
+
+    >>> myList = trellis.List([1,2,3])
+    >>> myList
+    [1, 2, 3]
+
+    >>> myList.reverse()    # no output while not being observed
+
+    >>> view.model = myList
+    [3, 2, 1]
+
+    >>> myList.reverse()    # but now we're being watched
+    [1, 2, 3]
+
+    >>> myList.insert(0, 4)
+    [4, 1, 2, 3]
+
+    >>> myList.sort()
+    [1, 2, 3, 4]
+    
+``trellis.List`` objects also have a receiver attribute called ``changed``.
+It's normally false, but is temporarily ``True`` during the recalculation
+triggered by a change to the list.  But as with all receiver attributes, you'll
+never see a value in it from non-rule code::
+
+    >>> myList.changed
+    False
+
+Only in rule code will you ever see it true, a moment before it becomes false::
+
+    >>> view.model = None   # quiet, please
+
+    >>> @trellis.Cell
+    ... def watcher():
+    ...     print myList.changed
+    >>> watcher.value
+    False
+
+    >>> del myList[0]
+    True
+    False
+
+    >>> myList
+    [2, 3, 4]
+
+Note, however, that you cannot use the ``.pop()`` method of ``List`` objects::
+
+    >>> myList.pop()
+    Traceback (most recent call last):
+      ...
+    InputConflict: Can't read and write in the same operation
+    
+Remember: the trellis wants all changes to be deferred until the next
+recalculation.  That means you can't see the effect of a change in the same
+moment during which you *make* the change, so operations like ``pop()`` are
+disallowed, because they would have to return the same value no matter how
+many times you called it during the same recalculation!  (Otherwise, the
+change hasn't really been deferred.)
+
+``trellis.List`` objects also have some inherent inefficiencies due to the wide
+variety of operations supported by Python lists.  While ``trellis.Set``
+and ``trellis.Dict`` objects update themselves in place by applying change
+logs, ``trellis.List`` has to use a copy-on-write strategy to manage updates,
+because there isn't any simple way to reduce operations like ``sort()``,
+``reverse()``, ``remove()``, etc. to a meaningful change log.  (That's why
+it only provides a simple ``changed`` flag.)
+
+So if you need to use large lists in an application, you may be better off
+creating a custom data structure of your own design.  That way, if you only
+need a subset of the list interface, you can implement a changelog-based
+structure.  In the next section, we'll see how to create a simple
+``SortedList`` type that tracks inserted and removed items, maintaining them
+in a sorted order and issuing change events.
+
+
+Creating Your Own Data Structures
+---------------------------------
 
 @todo/todo(func), todos(**attrs)
     Define one or more todo-cell attributes, that can send "messages to the
     future"
 
 .future
+
+dirty()
 
 
 Things To Do With A Trellis
@@ -775,10 +1222,6 @@ Persistence/ORM
 Async I/O
 Process Monitoring
 Live Business Statistics
-
-
-Connecting to Other Systems
-===========================
 
 
 
@@ -819,6 +1262,9 @@ poll()
 
 repeat()
     Schedule the current rule to be run again, repeatedly
+
+dirty()
+    Force the current rule's return value to be treated as if it changed
 
 without_observer(func, *args, **kw)
     Run func(*args, **kw) without making the current rule depend on it
