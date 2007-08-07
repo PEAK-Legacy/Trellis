@@ -282,12 +282,17 @@ the global update count and stores the new value in its own update count::
     >>> print i._version
     None
 
-    >>> i.value = 21
+    >>> i.value = 21    # first change of an unread/unwritten cell == no pulse
+    >>> i._version - start
+    0
+    >>> current_pulse() - start
+    0
+
+    >>> i.value = 22
     >>> i._version - start
     1
     >>> current_pulse() - start
     1
-
 
 4. XXX Out-of-dateness: A value is out of date if its update count is lower than
 the update count of any of the values it depends on.
@@ -650,8 +655,7 @@ so it immediately realizes it needs to recalculate.  X also notifies H first
 that a recalculation might be necessary.)
 
 
-Reading a value whose rule changes other values, causes the other values to
-propagate, blocking until no values are changing any more::
+Non-output rules can't change other cells::
 
     >>> def out():
     ...     r = inp.value + 1
@@ -661,11 +665,34 @@ propagate, blocking until no values are changing any more::
     >>> out = Cell(out)
     >>> inp = Cell(value=1)
     >>> out.value
-    1001
-    >>> inp.value
-    1000
+    Traceback (most recent call last):
+      ...
+    RuntimeError: Cells can't be changed by non-@action rules
 
-Or, here's an easier way to force a rule to repeat itself::
+    >>> from peak.events.trellis import Set, ActionCell
+    >>> def out():
+    ...     data.add(1)
+    >>> out = Cell(out)
+    >>> data = Set()
+    >>> out.value
+    Traceback (most recent call last):
+      ...
+    RuntimeError: @modifiers can't be called from non-@action rules
+
+    >>> def out():
+    ...     return 42
+    >>> out = ActionCell(out)
+    >>> def inp():
+    ...     return out.value
+    >>> inp = Cell(inp)
+    >>> inp.value
+    Traceback (most recent call last):
+      ...
+    RuntimeError: No rule may depend on the result of an action
+
+
+
+So, here's a better way to force a rule to repeat itself::
 
     >>> from peak.events.trellis import repeat
     >>> def counter():

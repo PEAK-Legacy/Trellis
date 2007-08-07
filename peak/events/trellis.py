@@ -6,7 +6,7 @@ import sys, UserDict, UserList, sets
 __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
-    'discrete', 'repeat', 'poll', 'without_observer', 'InputConflict',
+    'discrete', 'repeat', 'poll', 'InputConflict', 'action',
     'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Value', 'TaskCell',
     'dirty',
 ]
@@ -48,6 +48,7 @@ class ReadOnlyCell(object):
     _writebuf = _sentinel
     _can_freeze = True
     _writable = _const_type = False
+    _is_action = False
 
     def __init__(self, rule=None, value=None, discrete=False):
         self._state = _get_state()
@@ -70,17 +71,14 @@ class ReadOnlyCell(object):
         elif observer is not self:
             #if observer._state is not state:
             #    raise RuntimeError("Can't access cells in another task/thread")
-            mailbox = observer._mailbox
-            depends = mailbox.dependencies
-            listeners = self._listeners
-            if self not in depends: depends.append(self)
-            r = ref(mailbox, listeners.remove)
-            if r not in listeners: listeners.append(r)
+            observer.observe(self)
         if pulse is not self._version:
             self._check_dirty(state)
         return self._current_val
 
     value = property(get_value)
+
+
 
     def _check_dirty(self, state):
         pulse, observer, ctrl = state
@@ -104,8 +102,7 @@ class ReadOnlyCell(object):
                              or d._version is not pulse and d._check_dirty(state)
                         ):  # one of our dependencies changed, recalc
                             self._mailbox = m = Mailbox(self)  # break old deps
-                            new = self._rule()
-                            have_new = True
+                            new = self._rule(); have_new = True
                             if not m.dependencies and self._can_freeze:
                                 have_new = _sentinel    # flag for freezing
                             break   
@@ -120,7 +117,6 @@ class ReadOnlyCell(object):
                 new = self._reset
                 previous = self._current_val
                 have_new = (new != previous)
-    
             else:
                 # No new value and not discrete?  Then no change.
                 return False
@@ -157,9 +153,13 @@ class ReadOnlyCell(object):
             self.__class__.__name__, self._rule, self.value, e
         )
 
-
-
-
+    def observe(self, dep):
+        mailbox = self._mailbox
+        depends = mailbox.dependencies
+        listeners = dep._listeners
+        if dep not in depends: depends.append(dep)
+        r = ref(mailbox, listeners.remove)
+        if r not in listeners: listeners.append(r)
 
 
     def ensure_recalculation(self):
@@ -189,18 +189,18 @@ class InputConflict(Exception):
     """Attempt to set a cell to two different values during the same pulse"""
 
 
+class ActionCell(ReadOnlyCell):
+    """Cell type for @action rules and @modifier functions"""
+    __slots__ = ()
+    _is_action = True
 
+    def get_value(self):
+        pulse, observer, ctrl = self._state
+        if observer is None:
+            return ReadOnlyCell.get_value(self)
+        raise RuntimeError("No rule may depend on the result of an action")
 
-
-
-
-
-
-
-
-
-
-
+    value = property(get_value)
 
 
 class Constant(ReadOnlyCell):
@@ -220,10 +220,10 @@ class Constant(ReadOnlyCell):
     def __setattr__(self, name, value):
         """Constants can't be changed"""
         raise AttributeError("Constants can't be changed")
-
     def _check_dirty(self, state):
         return False
-
+    def observe(self, dep):
+        pass
     def __repr__(self):
         return "%s(%r)" % (type(self).__name__, self.value)
 
@@ -267,23 +267,28 @@ class Cell(ReadOnlyCell):
         #elif observer._state is not state:
         #    raise RuntimeError("Can't access cells in another task/thread")
         if pulse is not self._version:
-            if self._version is None:
+            if self._version is None:   # new, unread/unwritten cell
                 self._current_val = value
-            self._check_dirty(state)
+                self._version = self._changed_as_of = pulse
+                if self._reset is not _sentinel and value is not self._reset:
+                    # flag for auto-reset in next pulse
+                    ctrl.change(self)
+                if not observer: _cleanup(state)
+                return
+        self._check_dirty(state)
+        if observer is not None and not observer._is_action:
+            raise RuntimeError("Cells can't be changed by non-@action rules")
         old = self._writebuf
         if old is not _sentinel and old is not value and old!=value:
             raise InputConflict(old, value) # XXX
         self._writebuf = value
         ctrl.change(self)
-        if not observer:
-            _cleanup(state)
+        if not observer: _cleanup(state)
 
     value = property(ReadOnlyCell.get_value, set_value)
 
-
 def current_pulse():    return _get_state()[0]
 def current_observer(): return _get_state()[1]
-
 
 class CellValues(roles.Registry):
     """Registry for cell values"""
@@ -320,21 +325,21 @@ def default_factory(typ, ob, name, celltype=Cell):
         return celltype(rule, discrete=IsDiscrete(typ).get(name, False))
     return celltype(rule, value, IsDiscrete(typ).get(name, False))
 
+
 class Cells(roles.Role):
     __slots__ = ()
     role_key = classmethod(lambda cls: '__cells__')
     def __new__(cls, subject): return {}
 
-
 def rule(func):
     """Define a rule cell attribute"""
     return _rule(func, __frame=sys._getframe(1))
 
-def _rule(func, deco='@rule', factory=default_factory, **kw):
+def _rule(func, deco='@rule', factory=default_factory, extras=(), **kw):
     if isinstance(func, CellProperty):
         raise TypeError(deco+" decorator must wrap a function directly")
     else:
-        items = [(CellRules, func), (CellFactories, factory)]
+        items = [(CellRules, func), (CellFactories, factory)] + list(extras)
         return _invoke_callback(items, func, **kw)
 
 def value(value):
@@ -366,7 +371,6 @@ def todos(**attrs):
     """Define multiple todo-cell attributes"""
     _set_multi(sys._getframe(1), attrs, _todo)
 
-
 def optional(func):
     """Define a rule-cell attribute that's not automatically activated"""
     return _invoke_callback([(IsOptional, True)], func)
@@ -393,19 +397,15 @@ def _todo(func, **kw):
         ]
         return _invoke_callback(items, func, __proptype=TodoProperty, **kw)
 
-def initattrs(ob, cls):
-    for k, v in IsOptional(cls).iteritems():
-        if not v: getattr(ob, k)
+def discrete(func):
+    """Define a discrete rule attribute"""
+    return _discrete(func, __frame=sys._getframe(1))
 
-def without_observer(func, *args, **kw):
-    """Run func(*args, **kw) without making the current rule depend on it"""
-    o = _get_state()[1]
-    if o:
-        tmp, o._mailbox = o._mailbox, Mailbox(o)
-        try:     return func(*args, **kw)
-        finally: o._mailbox = tmp
-    else:
-        return func(*args, **kw)
+def action(func):
+    """Define an action cell attribute"""
+    return _rule(func, '@action', action_factory, [(CellValues, NO_VALUE)],
+        __frame=sys._getframe(1)
+    )
 
 
 class Component(object):
@@ -413,15 +413,21 @@ class Component(object):
     __slots__ = ()
     def __init__(self, **kw):
         cls = type(self)
-        self.__cells__ = Cells(self)
+        self.__cells__ = cells = Cells(self)
         for k, v in kw.iteritems():
             if not hasattr(cls, k):
                 raise TypeError("%s() has no keyword argument %r"
                     % (cls.__name__, k)
                 )
             setattr(self, k, v)
-        without_observer(initattrs, self, cls)
-
+        pulse, observer, ctrl = state = _get_state()
+        for k, v in IsOptional(cls).iteritems():
+            if not v and k not in cells and isinstance(getattr(cls,k),CellProperty):
+                ctrl.notify(
+                    cells.setdefault(k, CellFactories(cls)[k](cls, self, k))
+                )
+        if not observer:
+            _cleanup(state)
 
 def repeat():
     """Schedule the current rule to be run again, repeatedly"""
@@ -442,12 +448,6 @@ def poll():
 def dirty():
     """Force the current rule's return value to be treated as if it changed"""
     current_observer()._current_val = _sentinel
-
-def discrete(func):
-    """Define a discrete rule attribute"""
-    return _discrete(func, __frame=sys._getframe(1))
-
-
 
 class TaskCell(ReadOnlyCell):
     """Cell that manages a generator-based task"""
@@ -524,12 +524,12 @@ def resume():
 def task_factory(typ, ob, name):
     return default_factory(typ, ob, name, TaskCell)
 
+def action_factory(typ, ob, name):
+    return default_factory(typ, ob, name, ActionCell)
+
 def task(func):
     """Define a rule cell attribute"""
     return _rule(func, '@task', task_factory, __frame=sys._getframe(1))
-
-
-
 
 class CellProperty(object):
     """Descriptor for cell-based attributes"""
@@ -581,7 +581,8 @@ def _invoke_callback(
     items = list(extras)
 
     if func is not _sentinel:
-        items.append((CellRules, func))
+        if not isinstance(func, CellProperty):
+            items.append((CellRules, func))
         if func is not None and func.__name__!='<lambda>':
             name = name or func.__name__
 
@@ -612,7 +613,6 @@ def _invoke_callback(
 
 
 
-
 class TodoProperty(CellProperty):
     """Property representing a ``todo`` attribute"""
     decorators.decorate(property)
@@ -627,13 +627,12 @@ class TodoProperty(CellProperty):
                 cell = CellFactories(typ)[name](typ, ob, name)
                 cell = ob.__cells__.setdefault(name, cell)
             if cell._writebuf is _sentinel:
-                if current_observer() is None:
+                pulse, observer, ctrl = _get_state()
+                if not observer or not observer._is_action:
                     raise RuntimeError("future can only be accessed from a @modifier")
                 cell.value = CellRules(type(ob))[name].__get__(ob)()
             return cell._writebuf            
-        return property(
-            get, doc="The future value of the %r attribute" % name
-        )
+        return property(get, doc="The future value of the %r attribute" % name)
 
 def todo_factory(typ, ob, name):
     """Factory for ``todo`` cells"""
@@ -645,14 +644,15 @@ def modifier(method):
     def wrap(__method,__get_state,__cleanup,__Cell):
         """
         __pulse, __observer, __ctrl = __state = __get_state()
-        if __observer:
-            return __method($args)
-        __state[1] = __Cell()
-        try:
-            return __method($args)
-        finally:
-            __state[1] = __observer; __cleanup(__state)"""
-    return decorators.template_function(wrap)(method,_get_state,_cleanup,Cell)
+        if __observer is not None:
+            if __observer._is_action:
+                return __method($args)
+            raise RuntimeError("@modifiers can't be called from non-@action rules")
+        __state[1] = __Cell(None)
+        try:     return __method($args)
+        finally: __state[1] = __observer; __cleanup(__state)"""
+    return decorators.template_function(wrap)(method,_get_state,_cleanup,ActionCell)
+
 
 class Dict(UserDict.IterableUserDict, Component):
     """Dictionary-like object that recalculates observers when it's changed

@@ -545,6 +545,9 @@ Repeating, Polling, Recalc
 
     >>> def hello(): print "c =", c.value
     >>> c1 = Cell(hello)
+    >>> c2 = Cell(value=99)
+    >>> c2.value
+    99
 
     >>> Cell(c1.ensure_recalculation).value
     c = 99
@@ -552,12 +555,12 @@ Repeating, Polling, Recalc
     >>> c.value = 42
     c = 42
 
-    >>> Cell().value = 76
+    >>> c2.value = 76
     >>> c1.ensure_recalculation()
     >>> Cell().value
     c = 42
 
-    >>> Cell().value = 69
+    >>> c2.value = 69
     >>> c1.ensure_recalculation()
     >>> Cell().value
     c = 42
@@ -568,7 +571,7 @@ Repeating, Polling, Recalc
       ...
     RuntimeError: Already recalculated
 
-    >>> Cell().value = 1    # already calculated, no effect
+    >>> c2.value = 1    # already calculated, no effect
 
     >>> c1.ensure_recalculation()
     >>> Cell().value
@@ -576,7 +579,7 @@ Repeating, Polling, Recalc
 
 "Poll" re-invokes a rule on the next recalc of *anything*::
 
-    >>> Cell().value = 21
+    >>> c2.value = 21
     >>> c1.ensure_recalculation()
 
     >>> def count():
@@ -591,15 +594,15 @@ Repeating, Polling, Recalc
     >>> c.value
     1
 
-    >>> Cell().value = 16
+    >>> c2.value = 16
     calculating
     c = 2
 
-    >>> Cell().value = 7
+    >>> c2.value = 7
     calculating
     c = 3
 
-    >>> Cell().value = 66
+    >>> c2.value = 66
     calculating
     c = 4
 
@@ -612,7 +615,7 @@ At least, until/unless you get rid of the cell::
 
 Which of course requires that its listeners drop their references first::
 
-    >>> Cell().value = 27
+    >>> c2.value = 27
     calculating
     c = 99
 

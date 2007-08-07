@@ -52,7 +52,7 @@ Here's a super-trivial example::
     ...         F = lambda self: self.C * 1.8 + 32,
     ...         C = lambda self: (self.F - 32)/1.8,
     ...     )
-    ...     @trellis.rule
+    ...     @trellis.action
     ...     def show_values(self):
     ...         print "Celsius......", self.C
     ...         print "Fahrenheit...", self.F
@@ -70,7 +70,7 @@ Here's a super-trivial example::
     Fahrenheit... -40.0
 
 As you can see, each attribute is updated if the other one changes, and the
-``show_values`` rule is invoked any time the dependent values change...  but
+``show_values`` action is invoked any time the dependent values change...  but
 not if they don't::
 
     >>> tc.C = -40
@@ -133,8 +133,10 @@ To define a simple cell attribute, you can use the ``trellis.rules()`` and
 ``trellis.values()`` functions inside the class body to define multiple rules
 and values.  Or, you can use the ``@trellis.rule`` decorator to turn an
 individual function into a rule, or define a single value attribute by calling
-``trellis.value``.  Here's an example that uses all of these approaches, simply
-for the sake of illustration::
+``trellis.value``.  Last, but not least, you can use ``@trellis.action`` to
+define a rule that does something other than just computing a value.  Here's an
+example that uses all of these approaches, simply for the sake of
+illustration::
 
     >>> class Rectangle(trellis.Component):
     ...     trellis.values(
@@ -146,10 +148,13 @@ for the sake of illustration::
     ...
     ...     trellis.rules(
     ...         bottom = lambda self: self.top + self.height,
-    ...         right  = lambda self: self.left + self.width,
     ...     )
     ...
     ...     @trellis.rule
+    ...     def right(self):
+    ...         return self.left + self.width
+    ...
+    ...     @trellis.action
     ...     def show(self):
     ...         print self
     ...
@@ -168,8 +173,8 @@ for the sake of illustration::
     >>> r.left = 25
     Rectangle((25, 0), (17, 10), (42, 10))
 
-By the way, any attributes for which you define a rule (but *not* a value) will
-be read-only::
+By the way, any attributes for which you define an action or a rule (but *not*
+a value) will be read-only::
 
     >>> r.bottom = 99
     Traceback (most recent call last):
@@ -194,9 +199,9 @@ if you need or want to:
    named attributes.  (Note that you don't have to do this, but it often comes
    in handy.)
 
-3. It does a getattr() on each of the object's non-optional cell attributes,
+3. It creates a cell for each of the object's non-optional cell attributes,
    in order to initialize their rules and set up their dependencies.  We'll
-   cover this in detail in the next section, `Automatic Activation and
+   cover this in more detail in the next section, `Automatic Activation and
    Dependencies`_.
 
 In addition to doing these things another way, you can also use ``Cell``
@@ -222,8 +227,8 @@ That's because of two important Trellis principles:
    first cell has become an "observer" of the second cell.
 
 The first of these principles explains why the rectangle printed itself
-immediately: the ``show`` rule was calculated.  We can see this if we look
-at the rectangle's ``show`` attribute::
+immediately: the ``show`` rule was calculated.  We can see this if we look at
+the rectangle's ``show`` attribute::
 
     >>> print r.show
     None
@@ -300,10 +305,11 @@ created.
 
 The ``show`` rule we've been playing with on our ``Rectangle`` class is kind of
 handy for debugging, but it's kind of annoying when you don't need it.  Let's
-turn it into an "optional" rule, so that it won't run unless we ask it to::
+turn it into an "optional" action, so that it won't run unless we ask it to::
 
     >>> class QuietRectangle(Rectangle):
     ...     @trellis.optional
+    ...     @trellis.action
     ...     def show(self):
     ...         print self
 
@@ -352,7 +358,7 @@ For example::
     >>> class Viewer(trellis.Component):
     ...     trellis.values(model = None)
     ...
-    ...     @trellis.rule
+    ...     @trellis.action
     ...     def view_it(self):
     ...         if self.model is not None:
     ...             print self.model
@@ -418,6 +424,56 @@ references.  This means that views (and cells or components in general) can
 be garbage collected even if they have dependencies.  For more information
 about how Trellis objects are garbage collected, see the later section on
 `Garbage Collection`_.
+
+
+Accessing a Rule's Previous Value
+---------------------------------
+
+Sometimes it's useful to create a rule whose value is based in part on its
+previous value.  For example, a rule that produces an average over time, or
+that ignores "noise" in an input value, by only returning a new value when the
+input changes more than a certain threshhold since the last value.  It's fairly
+easy to do this, using rules that refer to their previous value::
+
+    >>> class NoiseFilter(trellis.Component):
+    ...     trellis.values(
+    ...         value = 0,
+    ...         threshhold = 5,
+    ...         filtered = 0
+    ...     )
+    ...     @trellis.rule
+    ...     def filtered(self):
+    ...         if abs(self.value - self.filtered) > self.threshhold:
+    ...             return self.value
+    ...         return self.filtered
+
+    >>> nf = NoiseFilter()
+    >>> nf.filtered
+    0
+    >>> nf.value = 1
+    >>> nf.filtered
+    0
+    >>> nf.value = 6
+    >>> nf.filtered
+    6
+    >>> nf.value = 2
+    >>> nf.filtered
+    6
+    >>> nf.value = 10
+    >>> nf.filtered
+    6
+    >>> nf.threshhold = 3   # changing the threshhold re-runs the filter...
+    >>> nf.filtered
+    10    
+    >>> nf.value = -3
+    >>> nf.filtered
+    -3
+
+As you can see, referring to the value of a cell from inside the rule that
+computes the value of that cell, will return the *previous* value of the cell.
+Notice, by the way, that this technique can be extended to keep track of an
+arbitrary number of variables, if you create a rule that returns a tuple.
+We'll use this technique more later on.
 
 
 Beyond The Spreadsheet: "Receiver" Cells
@@ -501,12 +557,13 @@ the value is arrived at doesn't depend on what order a bunch of manipulation
 methods are being called in, and whether those methods are correctly updating
 everything they should.
 
-Thus, as long as a cell's rule doesn't raise an uncaught exception, there is no
-way for it to become "corrupt" or "out of sync" with the rest of the program.
-This is a form of something called "referential transparency", which roughly
-means "order independent".  We'll cover this topic in more detail in the later
-section on `Managing State Changes`_.  But in the meantime, let's look at how
-using receivers instead of methods also helps us implement generic controllers.
+Thus, as long as a cell's rule doesn't modify *anything* except local
+variables, there is no way for it to become "corrupt" or "out of sync" with the
+rest of the program.  This is a form of something called "referential
+transparency", which roughly means "order independent".  We'll cover this topic
+in more detail in the later section on `Managing State Changes`_.  But in the
+meantime, let's look at how using receivers instead of methods also helps us
+implement generic controllers.
 
 
 Creating Generic Controllers by Sharing Cells
@@ -585,7 +642,7 @@ define a value cell for the text in its class::
     >>> class TextEditor(trellis.Component):
     ...     text = trellis.value('')
     ...
-    ...     @trellis.rule
+    ...     @trellis.action
     ...     def display(self):
     ...         print "updating GUI to show", repr(self.text)
 
@@ -615,22 +672,41 @@ Let's look at an example.  Suppose you'd like to trigger an action whenever a
 new high temperature is seen::
 
     >>> class HighDetector(trellis.Component):
-    ...     max = None
     ...     value = trellis.value(0)
-    ...
+    ...     max_and_new = trellis.value((None, False))
+    ... 
     ...     @trellis.rule
-    ...     def new_high(self):
-    ...         if self.max is None:
-    ...             self.max = self.value
-    ...         elif self.value > self.max:
-    ...             self.max = self.value
-    ...             return True
-    ...         return False
-    ...
-    ...     @trellis.rule
+    ...     def max_and_new(self):
+    ...         last_max, was_new = self.max_and_new
+    ...         if last_max is None:
+    ...             return self.value, False    # first seen isn't a new high
+    ...         elif self.value > last_max:
+    ...             return self.value, True
+    ...         return last_max, False
+    ... 
+    ...     trellis.rules(
+    ...         new_high = lambda self: self.max_and_new[1]
+    ...     )
+    ... 
+    ...     @trellis.action
     ...     def monitor(self):
     ...         if self.new_high:
     ...             print "New high"
+
+The ``max_and_new`` rule returns two values: the current maximum, and a flag
+indicating whether a new high was reached.  It refers to itself in order to
+see its own *previous* value, so it can tell whether a new high has been
+reached.  We set a default value of ``(None, False)`` so that the first time
+it's run, it will initialize itself correctly.  We then split out the "new
+high" flag from the tuple, using another rule.
+
+The reason we do the calculation this way, is that it makes our rule
+"re-entrant".  Because we're not modifying anything but local variables,
+it's impossible for an error in this rule to leave any corrupt data behind.
+We'll talk more about how (and why) to do things this way in the section below
+on `Managing State Changes`_.
+
+In the meantime, let's take our ``HighDetector`` for a test drive::
 
     >>> hd = HighDetector()
 
@@ -644,9 +720,9 @@ high, because ``new_high`` was *already True* from the previous high.
 
 Normal rules return what might be called "continuous" or "steady state" values.
 That is, their value remains the same until something causes them to be
-recalculated.  In this case, the second recalculation returns ``True``, just
-like the first one...  meaning that there's no change, and no observer
-recalculation.
+recalculated.  In this case, the second recalculation of ``new_high`` returns
+``True``, just like the first one...  meaning that there's no change, and no
+observer recalculation.
 
 But "discrete" rules are different.  Just like receivers, their value is
 automatically reset to a default value as soon as all their observers have
@@ -654,15 +730,7 @@ automatically reset to a default value as soon as all their observers have
 
     >>> class HighDetector2(HighDetector):
     ...     new_high = trellis.value(False) # <- the default value
-    ...
-    ...     @trellis.discrete       # <- instead of trellis.rule
-    ...     def new_high(self):
-    ...         if self.max is None:
-    ...             self.max = self.value
-    ...         elif self.value > self.max:
-    ...             self.max = self.value
-    ...             return True
-    ...         return False
+    ...     new_high = trellis.discrete(lambda self: self.max_and_new[1])
 
     >>> hd = HighDetector2()
 
@@ -678,7 +746,8 @@ automatically reset to a default value as soon as all their observers have
     New high
 
 As you can see, each new high is detected correctly now, because the value
-of ``new_high`` resets to ``False`` after it's calculated as anything else::
+of ``new_high`` resets to ``False`` after it's calculated as (or set to) any
+other value::
 
     >>> hd.new_high
     False
@@ -835,18 +904,18 @@ And all you have to do to get the benefits, is to divide your code three ways:
 * Input code, that sets trellis cells or calls modifier methods (but does not
   run inside trellis rules)
 
-* Processing rules that compute values, but do not directly change any other
-  cells
+* Processing rules that compute values, but do not make changes to any other
+  cells, attributes, or other data structures (apart from local variables)
 
-* Output code, that neither set values nor compute them, but simply sends data
-  on to other systems (like the screen, a socket, a database, etc.).  This code
-  may appear in standalone trellis rules, or it can be "application" code that
-  reads results from a finished trellis calculation.
+* Action rules that send data on to other systems (like the screen, a socket,
+  a database, etc.).  This code may appear in ``@trellis.action`` rules, or it
+  can be "application" code that reads results from a finished trellis
+  calculation.
 
 The first and third kinds of code are inherently order-dependent, since
 information comes in (and must go out) in a meaningful order.  However, by
-putting related outputs in the same output-only rule (or non-rule code), you
-can ensure that the required order is enforced by a single piece of code.  This
+putting related outputs in the same action rule (or non-rule code), you can
+ensure that the required order is enforced by a single piece of code.  This
 approach is highly bug-resistant.
 
 Second, you can reduce the order dependency of input code by making it do as
@@ -874,31 +943,31 @@ programs, here are a few brief guidelines that will keep your code easy to
 write, understand, and debug.
 
 
-Rule 1 - If Order Matters, Use Only One Rule
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Rule 1 - If Order Matters, Use Only One Action
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you care what order two "outside world" side-effects happen in, code them
-both in the same rule.
+both in the same action rule.
 
 For example, in the ``TempConverter`` demo, we had a rule that printed the
 Celsius and Fahrenheit temperatures.  If we'd put those two ``print``
-statements in separate rules, we'd have had no control over the output order;
+statements in separate actions, we'd have had no control over the output order;
 either Celsius or Fahrenheit might have come first on any given change to the
 temperatures.  So, if you care about the relative order of certain output or
 actions, you must put them all in one rule.  If that makes the rule too big or
 complex, you can always refactor to extract new rules to calculate the
 intermediate values.  Just don't put any of the *actions* (i.e. side-effects or
-outputs) in the other rules, only the *calculations*.  Then have a rule that
-*only* does the output or actions.
+outputs) in the other rules, only the *calculations*.  Then have an action rule
+that *only* does the output or actions.
 
 
 Rule 2 - Return Values, Don't Set Them
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Except for output rules that are updating other systems, rule should always
-*compute* a value, rather than changing other values.  If you need to compute
-more than one thing at once, just make a rule that returns a tuple or some
-other data structure, then make other rules that pull the values out.  E.g.::
+Rules should always *compute* a value, rather than changing other values.  If
+you need to compute more than one thing at once, just make a rule that returns
+a tuple or some other data structure, then make other rules that pull the
+values out.  E.g.::
 
     >>> class Example(trellis.Component):
     ...     trellis.rules(
@@ -912,15 +981,21 @@ computes and sets ``foo`` and ``bar``, the way you would in a callback-based
 system.  Remember: rules are not callbacks!  So always *return* values instead
 of *assigning* values.
 
+If you need to keep track of some value between invocations of the same rule,
+make that value part of the rule's return value, then refer back to that value
+each time.  See the sections above on `Accessing a Rule's Previous Value`_ and
+`"Discrete" Rules`_ for examples of rules that re-use their previous value,
+and/or use a tuple to keep track of state.
+
 
 Rule 3 - If You MUST Set, Do It From One Place or With One Value
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you set a value from more than one place, you are introducing an order
-dependency.  In fact, if you set a value more than once in a rule or modifier,
-the Trellis will stop you.  After all, all changes in a rule or modifier happen
-"at the same time".  And what would it mean to set a value to 22 and 33 "at the
-same time"?  A conflict error, that's what it would mean::
+dependency.  In fact, if you set a value more than once in an action or
+modifier, the Trellis will stop you.  After all, all changes in an action or
+modifier happen "at the same time".  And what would it mean to set a value to
+22 and 33 "at the same time"?  A conflict error, that's what it would mean::
 
     >>> @trellis.modifier
     ... def set_twice():
@@ -953,6 +1028,17 @@ with a toolbar button click, then it doesn't matter which event happens or
 even if all three could somehow happen at the same time, because the end result
 is exactly the same: the receiver processes the ``True`` message once and then
 discards it.
+
+
+Rule 4 - Change Takes Time
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Be aware that if you ever change a cell or other Trellis data structure from
+inside an ``@action`` rule, this will trigger a recalculation of the trellis,
+once all current action rules are completed.  This effectively causes a loop,
+which *may not terminate* if your action rule is triggered again.  So beware of
+making such changes; there is nearly always a better way to get the result
+you're looking for -- i.e., one that doesn't involve action rules.
 
 
 Mutable Data Structures
@@ -1045,7 +1131,7 @@ code::
     >>> d.added
     {}
 
-Also note, however, that you cannot use the ``.pop()``, ``.popitem()``, or
+Also note that you cannot use the ``.pop()``, ``.popitem()``, or
 ``.setdefault()`` methods of ``Dict`` objects::
 
     >>> d.setdefault(1, 2)
@@ -1244,7 +1330,7 @@ XXX This section isn't written yet
 
 * __cells__ attribute
 
-* Cell, Constant
+* Cell, Constant, ActionCell
 
 * .link
 
@@ -1271,9 +1357,6 @@ repeat()
 
 dirty()
     Force the current rule's return value to be treated as if it changed
-
-without_observer(func, \*args, \**kw)
-    Run func(\*args, \**kw) without making the current rule depend on it
 
 .ensure_recalculation()
     Ensure that this cell's rule will be (re)calculated
