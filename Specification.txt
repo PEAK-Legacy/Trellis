@@ -90,10 +90,9 @@ a ``Constant`` automatically after the next time it's read::
     ...     return 1
     
     >>> c = Cell(rule)
-    >>> c   # repr() uses .value, which reads the cell, causing rule to run...
+    >>> c.value
     computing
-    ReadOnlyCell(<function rule...>, 1)
-
+    1
     >>> c   # The rule didn't use any other cells, so we need never recalculate
     Constant(1)
 
@@ -213,8 +212,8 @@ Events::
     >>> last_ping = Cell(last_ping)
     >>> ping = Cell(discrete=True)
 
-    >>> last_ping
-    ReadOnlyCell(<function last_ping...>, None)
+    >>> print last_ping.value
+    None
 
     >>> ping.value = 1
     ping 1

@@ -1503,10 +1503,9 @@ Roadmap
 =======
 
 Open Issues
-  * Debugging code that does modifications is difficult, due in part to the
-    fact that printing a cell can change its state, and in part to the fact
-    that it's hard to know what cells are what.  There should be a way to give
-    cells an identifier, so you know what you're looking at.
+  * Debugging code that does modifications can be difficult because it can be
+    hard to know which cells are which.  There should be a way to give cells
+    an identifier, so you know what you're looking at.
 
   * Coroutine/task rules and discrete rules are somewhat unintuitive as to
     their results.  It's not easy to tell when you should ``poll()`` or

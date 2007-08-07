@@ -148,9 +148,10 @@ class ReadOnlyCell(object):
 
 
     def __repr__(self):
-        e = ('', ', discrete[%r]'% self._reset)[self._reset is not _sentinel]
+        e = ('', ' [out-of-date]')[self._version is not _get_state()[0]]
+        e += ('', ', discrete[%r]'% self._reset)[self._reset is not _sentinel]
         return "%s(%r, %r%s)" % (
-            self.__class__.__name__, self._rule, self.value, e
+            self.__class__.__name__, self._rule, self._current_val, e
         )
 
     def observe(self, dep):

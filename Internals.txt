@@ -162,7 +162,7 @@ to default_factory::
     CellProperty('y')
 
     >>> default_factory(Test, Test(), 'y')
-    Cell(None, 42)
+    Cell(None, 42 [out-of-date])
 
     >>> t = Test()
     >>> t.__cells__ = {}
@@ -190,20 +190,20 @@ constructor::
     >>> CellRules(Test)['x'] = None
     >>> CellValues(Test)['x'] = NO_VALUE
     >>> default_factory(Test, Test(), 'x')
-    Cell(None, None)
+    Cell(None, None [out-of-date])
 
 And it binds non-None rules to the instance::
 
     >>> CellRules(Test)['x'] = lambda self: 42
     >>> default_factory(Test, Test(), 'x')
-    ReadOnlyCell(<bound method Test.<lambda> of <Test object at...>>, 42)
+    ReadOnlyCell(<bound method Test.<lambda> of <Test object at...>>, None [out-of-date])
 
 And uses the event flag from IsDiscrete::
 
     >>> CellRules(Test)['x'] = None
     >>> IsDiscrete(Test)['x'] = True
     >>> default_factory(Test, Test(), 'x')
-    Cell(None, None, discrete[None])
+    Cell(None, None [out-of-date], discrete[None])
 
 The todo_factory only uses the rule to create the default value, and always
 creates a rule-free receiver, regardless of the value or receiver flag
@@ -217,7 +217,7 @@ settings::
     >>> Test.to_x = Test.x.future
 
     >>> todo_factory(Test, Test(), 'x')
-    Cell(None, {}, discrete[{}])
+    Cell(None, {} [out-of-date], discrete[{}])
 
 
 future, @modifier, etc.
@@ -269,14 +269,18 @@ The task_factory creates a TaskCell::
     >>> IsDiscrete(Test)['x'] = True
     >>> t = task_factory(Test, Test(), 'x')
     >>> t
-    TaskCell(<function step at...>, 54, discrete[54])
+    TaskCell(<function step at...>, 54 [out-of-date], discrete[54])
+    >>> t.value
+    54
     >>> t
     CompletedTask(54)
 
     >>> IsDiscrete(Test)['x'] = False
     >>> t = task_factory(Test, Test(), 'x')
     >>> t
-    TaskCell(<function step at...>, 1)
+    TaskCell(<function step at...>, 54 [out-of-date])
+    >>> t.value
+    1
     >>> t
     CompletedTask(1)
 
