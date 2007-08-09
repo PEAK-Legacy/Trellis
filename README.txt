@@ -1042,7 +1042,7 @@ you're looking for -- i.e., one that doesn't involve action rules.
 
 
 Mutable Data Structures
-=======================
+-----------------------
 
 So far, all of our Trellis examples have worked with atomic cell values, like
 integers, strings, and so forth.  We've avoided working with lists, sets,
@@ -1061,7 +1061,7 @@ create your own mutable types, as we'll discuss in a later section.
 
 
 trellis.Dict
-------------
+~~~~~~~~~~~~
 
 The ``trellis.Dict`` type looks pretty much like any dictionary, but it can
 be observed by rules.  Any change to the dictionary's contents will result
@@ -1151,7 +1151,7 @@ objects, as we'll see in the next two sections.
 
 
 trellis.Set
------------
+~~~~~~~~~~~
 
 Trellis ``Set`` objects offer nearly all the comforts of the Python standard
 library's ``sets.Set`` objects (minus ``.pop()``, and support for sets of
@@ -1204,7 +1204,7 @@ change hasn't really been deferred.)
 
 
 trellis.List
-------------
+~~~~~~~~~~~~
 
 A ``trellis.List`` looks and works pretty much the same as a normal Python
 list, except that it can be observed by rules::
@@ -1285,18 +1285,190 @@ in a sorted order and issuing change events.
 Creating Your Own Data Structures
 ---------------------------------
 
-XXX This section isn't written yet
+If you want to create your own data structures along the lines of ``Dict``,
+``List``, and ``Set``, you have a few options.  First, you can just build
+components that use those existing data types, and use ``@modifier`` methods
+to perform operations on them.  (If you just directly perform operations, then
+observers of your data structure may be recalculated in the middle of the
+changes.)
 
-@todo/todo(func), todos(\**attrs)
-    Define one or more todo-cell attributes, that can send "messages to the
-    future"
+Depending on the nature of the data structure you need, however, this may not
+be sufficient.  For example, when you perform multiple operations on a
+``trellis.Dict``, the later operations need to know about changes made by the
+earlier ones.  If you add some items and then delete one, for example, the dict
+needs to know whether the item you're deleting is one of the ones that you
+added.
 
-.future
-    Define an attribute that accesses a todo-cell's future value
+But, if you use normal read operations on the dictionary (like ``.has_key()``),
+these will only reflect the "before" state -- what the dictionary had in it
+during the current recalculation, before any new changes were made.
 
-dirty()
-    Force the current rule's return value to be treated as if it changed, so
-    that you can update a data structure in place from your "todo" attributes.
+So, the Trellis-supplied data types use a couple of special tools to allow them
+to "see the future" (and change it).
+
+Let's suppose that we're creating a simple "queue" type, that keeps track of
+items added to it.  Its output is a list of the most-recently added items,
+and the list becomes empty in the next recalculation if nobody adds anything to
+it::
+
+    >>> class Queue(trellis.Component):
+    ...     items = trellis.todo(lambda self: [])
+    ...     to_add = items.future
+    ...
+    ...     @trellis.modifier
+    ...     def add(self, item):
+    ...         self.to_add.append(item)
+    ...
+    ...     def __repr__(self):
+    ...         return str(self.items)
+
+    >>> q = Queue()
+    >>> view.model = q
+    []
+
+    >>> q.add(1)
+    [1]
+    []
+
+    >>> @trellis.modifier
+    ... def add_many(*args):
+    ...     for arg in args: q.add(arg)
+
+    >>> add_many(1,2,3)
+    [1, 2, 3]
+    []
+
+Let's break down the pieces here.  First, we create a "todo" cell.  A todo
+cell is discrete (like a ``receiver`` cell or ``@discrete`` rule), which means
+it resets to its default value after any changes.  (By the way, you can define
+todo cells with either a direct call as shown here, a ``@trellis.todo``
+decorator on a function, or using ``trellis.todos(attr=func, ...)`` in your
+class body.)
+
+The default value of a ``@todo`` cell is determined by calling the function it
+wraps when the cell is created.  This value is then saved as the default value
+for the life of the cell.
+
+The second thing that we do in this class is create a "future" view.  Todo
+cell properties have a ``.future`` attribute that returns a new property.  This
+property accesses the "future" version of the todo cell's value.
+
+Next, we define a modifier method, ``add()``.  This method accesses the
+``to_add`` attribute, and gets the *future* value of the ``items`` attribute.
+This future value is initially created by calling the "todo" cell's function.
+In this case, the todo function returns an empty list, so that's what ``add()``
+sees, and adds a value to it.  As a side effect of accessing this future value,
+the Trellis schedules a recalculation to occur after the current recalculation
+is finished.
+
+(Note, by the way, that you cannot access future values except from inside
+a ``@modifier`` function, and these in turn can only be called from ``@action``
+or non-Trellis code.)
+
+In our second example above, we create another ``@modifier`` that adds more
+than one item to the ``to_add`` attribute.  This works because only a single
+"future value" is created during a given recalculation sweep, and ``@modifier``
+methods guarantee that no new sweeps can occur while they are running.  Thus,
+the changes made in the modifier don't take effect until it returns.
+
+Finally, after each change, the queue resets itself to empty, because the
+default value of the ``items`` cell is the empty list created when the cell
+was initialized.
+
+Of course, since "todo" attributes are discrete (i.e., transient), what we've
+seen so far isn't enough to create a data structure that actually *keeps* any
+data around.  To do that, we need to combine "todo" attributes with a rule to
+update an existing data structure::
+
+    >>> class Queue2(Queue):
+    ...     added = trellis.todo(lambda self: [])
+    ...     to_add = added.future
+    ...
+    ...     @trellis.rule
+    ...     def items(self):
+    ...         items = self.items
+    ...         if items is None:
+    ...             items = []
+    ...         if self.added:
+    ...             return items + self.added
+    ...         return items
+
+    >>> q = Queue2()
+    >>> view.model = q
+    []
+
+    >>> q.add(1)
+    [1]
+
+    >>> add_many(2, 3, 4)
+    [1, 2, 3, 4]
+
+This version is very similar to the first version, but it separates ``added``
+from ``items``, and the ``items`` rule is set up to compute a new value that
+includes the added items.
+
+Notice, by the way, that the ``items`` rule returns a new list every time there
+is a change.  If it didn't, the updates wouldn't be tracked::
+
+    >>> class Queue3(Queue2):
+    ...     @trellis.rule
+    ...     def items(self):
+    ...         items = self.items
+    ...         if items is None:
+    ...             items = []
+    ...         if self.added:
+    ...             items.extend(self.added)
+    ...         return items
+
+    >>> q = Queue3()
+    >>> view.model = q
+    []
+
+    >>> q.add(1)
+
+    >>> add_many(2, 3, 4)
+
+Why are no updates displayed here?  Because ``items`` is being modified
+in-place, and when the trellis compares the "before" and "after" versions of
+its value, it concludes they are the *same*.  This didn't happen when we
+returned a new list, because the old list still had its old contents, and the
+new list was different.
+
+If you are modifying a return value in place like this, you should use the
+the ``trellis.dirty()`` API to flag that your return value has changed, even
+though it's the same object::
+
+    >>> class Queue4(Queue2):
+    ...     @trellis.rule
+    ...     def items(self):
+    ...         items = self.items
+    ...         if items is None:
+    ...             items = []
+    ...         if self.added:
+    ...             items.extend(self.added)
+    ...             trellis.dirty()
+    ...         return items
+
+    >>> q = Queue2()
+    >>> view.model = q
+    []
+
+    >>> q.add(1)
+    [1]
+
+    >>> add_many(2, 3, 4)
+    [1, 2, 3, 4]
+
+Please note, however, that using this API is as "dirty" as its name
+implies.  More precisely, the dirtiness is that we're modifying a value inside
+a rule -- the worst sort of no-no.  You must take extra care to ensure that
+all your dependencies have already been calculated before you perform the
+modification, otherwise an unexpected error could leave your data in a
+corrupted state.  In this example, the modification is the last thing that
+happens, and ``self.added`` has already been read, so it should be pretty safe.
+
+On the whole, though, it's best to stick with immutable values as much as
+possible, and avoid mutating data in place if you can.
 
 
 Other Things You Can Do With A Trellis
