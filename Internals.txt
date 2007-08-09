@@ -75,7 +75,7 @@ Getting or setting a cell attribute that has no cell in the object's
     >>> tc.F = 27
     Creating F cell for <class 'Converter'> instance
     >>> tc.F
-    27
+    200
 
     >>> tc.F = Cell(lambda: -tc.C)
     >>> tc.F
@@ -87,10 +87,10 @@ Cell factories are inherited by subclasses::
     ...     pass
     >>> tc2 = Converter2()
     >>> del tc2.__cells__['F']
-    >>> tc2.F = 27
+    >>> tc2.F = -40
     Creating F cell for <class 'Converter2'> instance
     >>> tc2.F
-    27
+    -80.0
 
 
 TodoProperty
@@ -992,4 +992,21 @@ Sets
 
 
 
+Misc.
+-----
+
+This bit tests whether a rule gets to fire when a cell's value is initialized.
+When you set a ruled cell's value before computing its value, the "old" value
+should be the passed-in value, and the "new" value should be the result of the
+rule running::
+
+    >>> def aRule():
+    ...     print "running"
+    ...     return 42
+
+    >>> c = Cell(aRule, 96)
+    >>> c.value = 27
+    running
+    >>> c.value
+    42
 

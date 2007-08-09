@@ -162,7 +162,6 @@ class ReadOnlyCell(object):
         r = ref(mailbox, listeners.remove)
         if r not in listeners: listeners.append(r)
 
-
     def ensure_recalculation(self):
         """Ensure that this cell's rule will be (re)calculated"""
         pulse, observer, ctrl = self._state
@@ -270,13 +269,11 @@ class Cell(ReadOnlyCell):
         if pulse is not self._version:
             if self._version is None:   # new, unread/unwritten cell
                 self._current_val = value
-                self._version = self._changed_as_of = pulse
-                if self._reset is not _sentinel and value is not self._reset:
-                    # flag for auto-reset in next pulse
-                    ctrl.change(self)
-                if not observer: _cleanup(state)
+                self._check_dirty(state)
+                if not observer:
+                    _cleanup(state)
                 return
-        self._check_dirty(state)
+            self._check_dirty(state)
         if observer is not None and not observer._is_action:
             raise RuntimeError("Cells can't be changed by non-@action rules")
         old = self._writebuf
