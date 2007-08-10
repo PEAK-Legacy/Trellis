@@ -755,6 +755,17 @@ Multitasking
 
     >>> del lp.__cells__    # break reference cycles before globals are cleared
 
+    >>> c = Cell(value=1)
+    >>> c.value = 1
+
+    >>> def t():
+    ...     c.value = 2
+    ...     c.value = 3
+    ...     yield 4
+    >>> TaskCell(t).value
+    Traceback (most recent call last):
+      ...
+    InputConflict: (2, 3)
 
 Dictionaries
 ------------
@@ -992,8 +1003,8 @@ Sets
 
 
 
-Misc.
------
+Cell and Component Initialization
+---------------------------------
 
 This bit tests whether a rule gets to fire when a cell's value is initialized.
 When you set a ruled cell's value before computing its value, the "old" value
@@ -1009,4 +1020,31 @@ rule running::
     running
     >>> c.value
     42
+
+And if the setting occurs in a modifier or action rule, the rule's execution
+should be deferred until the current calculation/rule is complete, thereby
+allowing several cells to be simultaneously pre-set and initialized at once::
+
+    >>> c = Cell(aRule, 96)
+    >>> def go():
+    ...     c.value = 27
+    ...     print "finished setting"
+    >>> modifier(go)()
+    finished setting
+    running
+    >>> c.value
+    42
+
+Component __init__ code always runs as though it were inside an @action or
+@modifier, so that all attributes are initialized "simultaneously".
+
+    >>> class Dummy(trellis.Component):
+    ...     def __init__(self):
+    ...         c.value = 1  # this sets the value as of the *previous* pulse
+    ...         c.value = 2  # this one sets the value for *this* pulse
+    
+    >>> Dummy()
+    Traceback (most recent call last):
+      ...
+    InputConflict: (1, 2)
 

@@ -30,13 +30,13 @@ class _Controller:
         self.notify = now.append
         self.change = later.append
         self.cell = Cell(current_pulse, 1)
-    
+        self.action = DummyAction()
+
 class Mailbox(object):
     __slots__ = '__weakref__', 'owner', 'dependencies'
     def __init__(self, owner, *args):
         self.owner = ref(owner)
         self.dependencies = list(args)
-
 
 
 class ReadOnlyCell(object):
@@ -213,19 +213,19 @@ class Constant(ReadOnlyCell):
     
     _can_freeze = False
     _mailbox = None
-
     def __init__(self, value):
         ReadOnlyCell._current_val.__set__(self, value)
+        #ReadOnlyCell._state.__set__(self, _get_state())
 
     def __setattr__(self, name, value):
         """Constants can't be changed"""
         raise AttributeError("Constants can't be changed")
-    def _check_dirty(self, state):
-        return False
-    def observe(self, dep):
-        pass
+    def _check_dirty(self, state): return False
+    def observe(self, dep): pass
     def __repr__(self):
         return "%s(%r)" % (type(self).__name__, self.value)
+    def ensure_recalculation(self):
+        raise TypeError("Can't recalculate a cell without a rule")
 
 def _cleanup(state):
     pulse, observer, ctrl = state
@@ -269,7 +269,7 @@ class Cell(ReadOnlyCell):
         if pulse is not self._version:
             if self._version is None:   # new, unread/unwritten cell
                 self._current_val = value
-                self._check_dirty(state)
+                ctrl.notify(self)   # schedule for recalc in this pulse
                 if not observer:
                     _cleanup(state)
                 return
@@ -322,6 +322,8 @@ def default_factory(typ, ob, name, celltype=Cell):
     if value is _sentinel:
         return celltype(rule, discrete=IsDiscrete(typ).get(name, False))
     return celltype(rule, value, IsDiscrete(typ).get(name, False))
+
+
 
 
 class Cells(roles.Role):
@@ -406,9 +408,29 @@ def action(func):
     )
 
 
+class ComponentClass(type):
+    """Metaclass that ensures components are created atomically"""
+
+    def __call__(self, *args, **kw):
+        pulse, observer, ctrl = state = _get_state()
+        if observer is not None and observer._is_action:
+            return type.__call__(self, *args, **kw)
+        state[1] = ctrl.action
+        try:
+            rv = type.__call__(self, *args, **kw)
+        finally:
+            state[1] = observer
+        if observer is None:
+            _cleanup(state)
+        return rv
+
+            
 class Component(object):
     """Base class for objects with Cell attributes"""
+
     __slots__ = ()
+    __metaclass__ = ComponentClass
+    
     def __init__(self, **kw):
         cls = type(self)
         self.__cells__ = cells = Cells(self)
@@ -418,14 +440,14 @@ class Component(object):
                     % (cls.__name__, k)
                 )
             setattr(self, k, v)
+
         pulse, observer, ctrl = state = _get_state()
         for k, v in IsOptional(cls).iteritems():
             if not v and k not in cells and isinstance(getattr(cls,k),CellProperty):
                 ctrl.notify(
                     cells.setdefault(k, CellFactories(cls)[k](cls, self, k))
                 )
-        if not observer:
-            _cleanup(state)
+
 
 def repeat():
     """Schedule the current rule to be run again, repeatedly"""
@@ -447,7 +469,28 @@ def dirty():
     """Force the current rule's return value to be treated as if it changed"""
     current_observer()._current_val = _sentinel
 
-class TaskCell(ReadOnlyCell):
+
+class DummyAction(Constant):
+    """Placeholder cell used by @modifier and Component() to enter mod state"""
+
+    __slots__ = ()   
+    _is_action = True
+
+    def __init__(self):
+        Constant.__init__(self, None)
+
+
+
+
+
+
+
+
+
+
+
+
+class TaskCell(ActionCell):
     """Cell that manages a generator-based task"""
     __slots__ = '_result', '_error'
 
@@ -517,7 +560,7 @@ def resume():
     elif c._reset is not _sentinel:
         return c._reset
     else:
-        return c.value
+        return c._current_val
 
 def task_factory(typ, ob, name):
     return default_factory(typ, ob, name, TaskCell)
@@ -639,17 +682,17 @@ def todo_factory(typ, ob, name):
 
 def modifier(method):
     """Mark a method as performing modifications to Trellis data"""
-    def wrap(__method,__get_state,__cleanup,__Cell):
+    def wrap(__method,__get_state,__cleanup):
         """
         __pulse, __observer, __ctrl = __state = __get_state()
         if __observer is not None:
             if __observer._is_action:
                 return __method($args)
             raise RuntimeError("@modifiers can't be called from non-@action rules")
-        __state[1] = __Cell(None)
+        __state[1] = __ctrl.action
         try:     return __method($args)
         finally: __state[1] = __observer; __cleanup(__state)"""
-    return decorators.template_function(wrap)(method,_get_state,_cleanup,ActionCell)
+    return decorators.template_function(wrap)(method,_get_state,_cleanup)
 
 
 class Dict(UserDict.IterableUserDict, Component):
