@@ -6,8 +6,8 @@ import sys, UserDict, UserList, sets
 __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
-    'discrete', 'repeat', 'poll', 'InputConflict', 'action',
-    'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Value', 'TaskCell',
+    'discrete', 'repeat', 'poll', 'InputConflict', 'action', 'ActionCell',
+    'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Return', 'TaskCell',
     'dirty',
 ]
 
@@ -201,7 +201,7 @@ class ActionCell(ReadOnlyCell):
         raise RuntimeError("No rule may depend on the result of an action")
 
     value = property(get_value)
-
+    def __init__(self, rule): ReadOnlyCell.__init__(self,rule,None,False)
 
 class Constant(ReadOnlyCell):
     """An immutable cell that no longer depends on anything else"""
@@ -320,10 +320,10 @@ def default_factory(typ, ob, name, celltype=Cell):
     if rule is not None:
         rule = rule.__get__(ob, typ)
     if value is _sentinel:
-        return celltype(rule, discrete=IsDiscrete(typ).get(name, False))
+        if IsDiscrete(typ).get(name, False):
+            return celltype(rule, discrete=True)
+        return celltype(rule)
     return celltype(rule, value, IsDiscrete(typ).get(name, False))
-
-
 
 
 class Cells(roles.Role):
@@ -494,7 +494,7 @@ class TaskCell(ActionCell):
     """Cell that manages a generator-based task"""
     __slots__ = '_result', '_error'
 
-    def __init__(self, func, value=None, discrete=False):
+    def __init__(self, func):
         VALUE = self._result = []
         ERROR = self._error  = []               
         STACK = [func()]; CALL = STACK.append; RETURN = STACK.pop;
@@ -520,7 +520,7 @@ class TaskCell(ActionCell):
                         break
                     elif hasattr(rv, 'next'):
                         CALL(rv); continue
-                    elif isinstance(rv, Value):
+                    elif isinstance(rv, Return):
                         rv = rv.value
                     VALUE.append(rv)
                     if len(STACK)==1: break
@@ -529,7 +529,7 @@ class TaskCell(ActionCell):
                 repeat()    # don't become Constant while still running
             return resume()
 
-        ReadOnlyCell.__init__(self, step, value, discrete)
+        ReadOnlyCell.__init__(self, step, None, False)
 
 class CompletedTask(Constant, TaskCell):
     """Task that has exhausted its generator"""
@@ -540,7 +540,7 @@ TaskCell._const_type = CompletedTask
 Pause = symbols.Symbol('Pause', __name__)
 
 decorators.struct()
-def Value(value):
+def Return(value):
     """Wrapper for yielding a value from a task"""
     return value,
 

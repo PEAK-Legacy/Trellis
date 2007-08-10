@@ -266,19 +266,11 @@ The task_factory creates a TaskCell::
     >>> from peak.events.trellis import task_factory
     >>> def f(self): yield 1
     >>> CellRules(Test)['x'] = f
-    >>> IsDiscrete(Test)['x'] = True
-    >>> t = task_factory(Test, Test(), 'x')
-    >>> t
-    TaskCell(<function step at...>, 54 [out-of-date], discrete[54])
-    >>> t.value
-    54
-    >>> t
-    CompletedTask(54)
-
+    >>> CellValues(Test)['x'] = NO_VALUE
     >>> IsDiscrete(Test)['x'] = False
     >>> t = task_factory(Test, Test(), 'x')
     >>> t
-    TaskCell(<function step at...>, 54 [out-of-date])
+    TaskCell(<function step at...>, None [out-of-date])
     >>> t.value
     1
     >>> t
@@ -749,7 +741,7 @@ Multitasking
 
     >>> y = yielder(lp)
     >>> def t():
-    ...     yield Value(y)
+    ...     yield Return(y)
     >>> TaskCell(t).value is y
     True
 

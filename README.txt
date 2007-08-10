@@ -187,22 +187,25 @@ write the attribute's value.
 
 Note, by the way, that you aren't required to make everything in your program a
 ``trellis.Component`` in order to use the Trellis.  The ``Component`` class
-does only three things, all in its ``__init__`` method, and you are free to
-accomplish these things some other way (e.g. in your own ``__init__`` method)
-if you need or want to:
+does only four things, and you are free to accomplish these things some other
+way if you need or want to:
 
 1. It sets ``self.__cells__ = trellis.Cells(self)``.  This creates a special
    dictionary that will hold all the ``Cell`` objects used to implement cell
    attributes.
 
 2. It takes any keyword arguments it receives, and uses them to initialize any
-   named attributes.  (Note that you don't have to do this, but it often comes
-   in handy.)
+   named attributes.  (Note that you don't necessarily have to do this, but it
+   often comes in handy.)
 
 3. It creates a cell for each of the object's non-optional cell attributes,
    in order to initialize their rules and set up their dependencies.  We'll
    cover this in more detail in the next section, `Automatic Activation and
    Dependencies`_.
+
+4. It wraps the entire object creation process in a ``@modifier``, so that all
+   of the above operations occur in a single logical transaction.  We'll cover
+   this more in a later section on `Managing State Changes`_.
 
 In addition to doing these things another way, you can also use ``Cell``
 objects directly, without any ``Component`` classes.  This is discussed more
@@ -1099,12 +1102,13 @@ change is taking place they temporarily become non-empty.  For example::
 
     >>> view.model = None
 
-    >>> @trellis.Cell
-    ... def dump():
-    ...     for name in 'added', 'changed', 'deleted':
-    ...         if getattr(d, name):
-    ...             print name, '=', getattr(d, name)
-    >>> dump.value
+    >>> class Dumper(trellis.Component):
+    ...     @trellis.action
+    ...     def dump(self):
+    ...         for name in 'added', 'changed', 'deleted':
+    ...             if getattr(d, name):
+    ...                 print name, '=', getattr(d, name)
+    >>> dumper=Dumper()
 
     >>> del d['a']
     deleted = {'a': 2}
@@ -1175,12 +1179,13 @@ Similar to the ``Dict`` type, the ``Set`` type offers receiver set attributes,
 
     >>> view.model = None
 
-    >>> @trellis.Cell
-    ... def dump():
-    ...     for name in 'added', 'removed':
-    ...         if getattr(s, name):
-    ...             print name, '=', list(getattr(s, name))
-    >>> dump.value
+    >>> class Dumper(trellis.Component):
+    ...     @trellis.action
+    ...     def dump(self):
+    ...         for name in 'added', 'removed':
+    ...             if getattr(s, name):
+    ...                 print name, '=', list(getattr(s, name))
+    >>> dumper=Dumper()
 
     >>> s.add('a')
     added = ['a']
@@ -1239,10 +1244,12 @@ Only in rule code will you ever see it true, a moment before it becomes false::
 
     >>> view.model = None   # quiet, please
 
-    >>> @trellis.Cell
-    ... def watcher():
-    ...     print myList.changed
-    >>> watcher.value
+    >>> class Watcher(trellis.Component):
+    ...     @trellis.action
+    ...     def dump(self):
+    ...         print myList.changed
+
+    >>> watcher=Watcher()
     False
 
     >>> del myList[0]
@@ -1494,56 +1501,496 @@ Advanced Features and API Details
 Working With Cell Objects
 =========================
 
-XXX This section isn't written yet
+Throughout the main tutorial, we worked only with component attributes.  But
+it's also possible to work directly with ``Cell`` objects.  For example, here's
+a temperature converter implemented directly with cells::
 
-* no value makes a read-only cell
+    >>> F = trellis.Cell(lambda: C.value * 1.8 + 32, 32)
+    >>> C = trellis.Cell(lambda: (F.value - 32)/1.8, 0)
 
-* read-only cells become constant
+    >>> F.value
+    32
+    >>> C.value
+    0
+    >>> F.value = 212
+    >>> C.value
+    100.0
 
-* __cells__ attribute
+The ``trellis.Cell()`` constructor takes three arguments: a zero-argument
+callable (or ``None``), an optional value, and an optional "discrete" flag.
+In our example above, we created a pair of cells with both rules and values,
+that are not discrete.
 
-* Cell, Constant, ActionCell
+Notice, by the way, that when you are directly creating cells, you must use
+zero-argument callables.  That is, Cell objects don't pass in a "self" argument
+to their rules.  (The reason rules in a component use a "self" is that those
+rules are turned into methods before the cell is created.  The Cell doesn't
+pass in a "self", but it's already bound to the method, so it shows up anyway.)
 
-* .link
+The ``value`` attribute of a ``Cell`` can be read or set, to get or change the
+value of the cell, and it works just like getting or setting a component cell
+attribute (except that setting a cell's value to another cell doesn't cause the
+cell to be replaced!).  In addition to the ``.value`` attribute, there are also
+``get_value()`` and ``set_value()`` methods::
 
-* .value
+    >>> C.set_value(-40)
 
-* .get_value()
+    >>> F.get_value()
+    -40.0
+    
+These can be useful if you need to register callbacks with other systems.  For
+example, you could use a cell's ``set_value()`` method as a callback for a
+Twisted "deferred" object, so that the cell would receive the deferred's value
+when it became available.
 
-* .set_value(value)
+Here's our earlier "noise filter" example, reconstituted as a set of cells::
+
+    >>> value = trellis.Cell(value=0)
+    >>> threshhold = trellis.Cell(value=5)
+    >>> def filtered():
+    ...     if abs(value.value - filtered.value) > threshhold.value:
+    ...         return value.value
+    ...     return filtered.value
+    
+    >>> filtered = trellis.Cell(filtered, 0)
+
+    >>> filtered.value
+    0
+    >>> value.value = 1
+    >>> filtered.value
+    0
+    >>> value.value = 6
+    >>> filtered.value
+    6
 
 
-Recalculation and Dependency Management
-=======================================
+Read-Only and Constant Cells
+----------------------------
 
-XXX This section isn't written yet
+As you can see, you can provide either a value only, or a rule and a value when
+you create a cell.  However, if you provide just a rule and no value, you end
+up with a read-only cell whose value can't be set::
 
-modifier(method)
-    Mark a method as performing modifications to Trellis data
+    >>> roc = trellis.Cell(lambda: 123)
 
-poll()
-    Recalculate this rule the next time *any* other cell is set
+    >>> roc.value = 456
+    Traceback (most recent call last):
+      ...
+    AttributeError: can't set attribute
 
-repeat()
-    Schedule the current rule to be run again, repeatedly
+In fact, it's not even a ``Cell`` instance, but of a different type
+altogether::
 
-dirty()
-    Force the current rule's return value to be treated as if it changed
+    >>> roc
+    ReadOnlyCell(<function <lambda> at ...>, None [out-of-date])
 
-.ensure_recalculation()
-    Ensure that this cell's rule will be (re)calculated
+What the above means is that you have a read-only cell whose current value is
+``None``, but is out-of-date.  This means that if you actually try to *read*
+the value of this cell, it may or may not match what the ``repr()`` showed.
+(This is because simply looking at the cell shouldn't cause the cell to
+recalculate; that would be very painful when debugging).
+
+If we actually read the value of this cell, the rule will be run::
+
+    >>> roc.value
+    123
+
+But since the rule doesn't depend on any other cells, the cell changes type
+again, to a ``Constant``::
+
+    >>> roc
+    Constant(123)
+
+Since the rule didn't depend on any other cells, there is never any way that
+it could be meaningfully recalculated.  Thus, it becomes constant, and cannot
+be observed by any other rules.  If we create another rule that reads this
+cell, it will not end up depending on it::
+
+    >>> cell2 = trellis.Cell(lambda: roc.value)
+    >>> cell2.value
+    123
+
+    >>> cell2
+    Constant(123)
+    
+Thus, constant values propagate automatically through the cell network,
+eliminating dependencies on things that can't possibly change.  Of course, if a
+read-only cell depends on a cell that *can* change, it remains a read-only
+cell, and will be recalculated whenever its dependencies change::
+
+    >>> c1 = trellis.Cell(value=0)
+    >>> c2 = trellis.Cell(lambda: c1.value * 2)
+
+    >>> c2.value
+    0
+    >>> c1.value = 27
+    >>> c2
+    ReadOnlyCell(<function <lambda>...>, 54)
+
+Note that you can take advantage of constant propagation by explicitly setting
+a component attribute to a ``trellis.Constant`` at creation time.  For example,
+if for some reason you wanted a temperature converter that could only be used
+once::
+
+    >>> tc = TempConverter(C=trellis.Constant(100))
+    Celsius...... 100
+    Fahrenheit... 212.0
+
+    >>> tc.C = -40
+    Traceback (most recent call last):
+      ...
+    AttributeError: Constants can't be changed
+
+(This would probably be more useful with something like the ``NoiseFilter``
+example, in that you could set its ``threshhold`` to a ``Constant()``,
+eliminating the need for the ``filtered`` rule to check for changes to the
+``threshhold`` in order to know if it should be recalculated.)
+
+
+Working With A Component's Cells
+--------------------------------    
+
+As we saw in the main tutorial, the ``trellis.Cells()`` API returns a
+dictionary of active cells for a component::
+
+    >>> trellis.Cells(view)
+    {'model': Cell(None, [1, 2, 3, 4] [out-of-date]),
+     'view_it': ActionCell(<bound method Viewer.view_it of
+                           <Viewer object at 0x...>>, None [out-of-date])}
+
+In the case of a ``Component``, this data is also stored in the component's
+``__cells__`` attribute::
+
+    >>> trellis.Cells(view) is view.__cells__
+    True
+
+This makes it possible for you to set up direct links between components using
+shared cells.  It also lets you access cell objects directly, in order to e.g.
+register their ``set_value()`` methods as callbacks for other systems.
+
+
+Discrete and Action Cells
+-------------------------
+
+To make a cell "discrete" (i.e. a receiver or discrete rule), you set its
+third constructor argument (i.e., ``discrete``) to true::
+
+    >>> aReceiver = trellis.Cell(value=0, discrete=True)
+    >>> aReceiver.value
+    0
+
+    >>> v = Viewer(model = aReceiver)
+    0
+    >>> aReceiver.value = 42
+    42
+    0
+
+As you can see, the value a discrete cell is created with, is the default value
+it resets to between received (or calculated) values.  If you want to make
+a discrete rule, just include a rule in addition to the default value and the
+discrete fla.g
+
+To make an "action" cell, use ``trellis.ActionCell``::
+
+    >>> trellis.Cells(view)['view_it']
+    ActionCell(<bound method Viewer.view_it of
+               <Viewer object at 0x...>>, None [out-of-date])
+
+The ActionCell constructor takes only one parameter: a zero-argument callable,
+such as a bound method or a function with no parameters.  You can't set a value
+for an ``ActionCell`` (because it's not writable), nor can you make it discrete
+(since that would imply a readable value, and action cells exist only for their
+side-effects).
+
+
+Cell Attribute Metadata
+-----------------------
+
+The various decorators and APIs that set up cell attributes in components all
+work by registering metadata for the enclosing class.  This metadata can be
+accessed using various ``peak.util.roles.Registry`` objects.  (See the
+documentation of the ``ObjectRoles`` package at the Python Package Index for
+more info on registries.)
+
+In the current version of the Trellis library, these registries should mostly
+be considered implementation details; they are not officially documented and
+may change in a future release.  However, if you need to be able to access a
+superclass' definition of a rule, you can do so using the ``CellRules``
+registry::
+
+    >>> trellis.CellRules(NoiseFilter)
+    {'filtered': <function filtered at 0x...>}
+
+As you can see, calling ``trellis.CellRules(sometype)`` will return you a
+dictionary of rules for that type.  You can then pull out the definition you
+need and call it.  This particular registry should be a relatively stable API
+across releases.
 
 
 Co-operative Multitasking
 =========================
 
-XXX @task, Pause, Value, resume(), and TaskCell
+The Trellis allows for a limited form of co-operative multitasking, using
+generator functions.  By declaring a generator function as a ``@task`` method,
+you can get it to run across multiple trellis recalculations, retaining its
+state along the way.  For example::
+
+    >>> class TaskExample(trellis.Component):
+    ...     trellis.receivers(
+    ...         start = False,
+    ...         stop = False
+    ...     )
+    ...     @trellis.task
+    ...     def demo(self):
+    ...         print "waiting to start"
+    ...         while not self.start:
+    ...             yield trellis.Pause
+    ...         print "starting"
+    ...         while not self.stop:
+    ...             print "waiting to stop"
+    ...             yield trellis.Pause
+    ...         print "stopped"
+
+    >>> t = TaskExample()
+    waiting to start
+
+    >>> t.start = True
+    starting
+    waiting to stop
+    waiting to stop
+
+    >>> t.stop = True
+    stopped
+
+A ``@trellis.task`` is like a ``@trellis.action``, in that it is allowed to
+modify other cells, and its output cannot be observed by normal rules.  The
+function you decorate it with, however, must be a generator.  The generator
+can yield ``trellis.Pause`` in order to suspend itself until a cell it depends
+on has changed.
+
+In the above example, the task initially depends on the value of the ``start``
+cell, so it is not resumed until ``start`` is set to ``True``.  Then it prints
+"starting", and waits for ``self.stop`` to become true.  However, at this point
+it now depends on both ``start`` *and* ``stop``, and since ``start`` is a
+"receiver" cell, it resets to ``False``, causing the task to resume.  (Which is
+why "waiting to stop" gets printed twice at that point.)
+
+We then set ``stop`` to true, which causes the loop to exit.  The task is now
+finished, and any further changes will not re-invoke it.  In fact, if we
+examine the cell, we'll see that it has become a ``CompletedTask`` cell::
+
+    >>> trellis.Cells(t)['demo']
+    CompletedTask(None)
+
+even though it's initially a ``TaskCell``::
+
+    >>> trellis.Cells(TaskExample())['demo']
+    waiting to start
+    TaskCell(<function step...>, None)
 
 
-Cell Metadata
-=============
+Invoking Subtasks
+-----------------
 
-XXX CellRules, CellValues, CellFactories, IsOptional, and IsDiscrete
+Tasks can invoke or "call" other generators by yielding them.  For example, we
+can rewrite our example like this, for more modularity::
+
+    >>> class TaskExample(trellis.Component):
+    ...     trellis.receivers(
+    ...         start = False,
+    ...         stop = False
+    ...     )
+    ... 
+    ...     def wait_for_start(self):
+    ...         print "waiting to start"
+    ...         while not self.start:
+    ...             yield trellis.Pause
+    ... 
+    ...     def wait_for_stop(self):
+    ...         while not self.stop:
+    ...             print "waiting to stop"
+    ...             yield trellis.Pause
+    ... 
+    ...     @trellis.task
+    ...     def demo(self):
+    ...         yield self.wait_for_start()
+    ...         print "starting"
+    ...         yield self.wait_for_stop()
+    ...         print "stopped"
+
+    >>> t = TaskExample()
+    waiting to start
+
+    >>> t.start = True
+    starting
+    waiting to stop
+    waiting to stop
+
+    >>> t.stop = True
+    stopped
+
+Yielding a generator from a ``@task`` causes that generator to temporarily
+replace the main generator, until the child generator returns, yields a
+non-``Pause`` value, or raises an exception.  At that point, control returns to
+the "parent" generator.  Subtasks may be nested to any depth.
+
+
+Receiving Values and Propagating Exceptions
+-------------------------------------------
+
+If you are targeting Python 2.5 or higher, you don't need to do anything
+special to receive values yielded by subtasks, or to ensure that subtask
+exceptions are propagated.  You can receive values using expressions like::
+
+    result = yield someGenerator(someArgs)
+
+However, in earlier versions of Python, this syntax doesn't exist, so you must
+use the ``trellis.resume()`` function instead, e.g.::
+
+    yield someGenerator(someArgs); result = trellis.resume()
+
+If you are writing code intended to run on Python 2.3 or 2.4 (as well as 2.5),
+you should call ``trellis.resume()`` immediately after a subtask invocation
+(preferably on the same line, as shown), *even if you don't need to get the
+result*.  E.g.::
+
+    yield someGenerator(someArgs); trellis.resume()
+
+The reason you should do this is that Python versions before 2.5 do not allow
+you to pass exceptions into a generator, so the Trellis can't cause the
+``yield`` statement to propagate an error from ``someGenerator()``.  If the
+subtask raised an exception, it will silently vanish unless the ``resume()``
+function is called.
+
+The reason to put it on the same line as the yield is so that you can see the
+subtask call in the error's traceback, instead of just a line saying
+``trellis.resume()``!  (Note, by the way, that it's perfectly valid to use
+``trellis.resume()`` in code that will also run under Python 2.5; it's just
+redundant unless the code will also be used with older Python versions.)
+
+The ability to receive values from a subtask lets you create utility functions
+that wait for events to occur in some non-Trellis system.  For example, you
+could create a function like this, to let you wait for a Twisted "deferred" to
+fire::
+
+    def wait_for(deferred):
+        result = trellis.Cell(None, trellis.Pause)
+        deferred.addBoth(result.set_value)
+        while result.value is trellis.Pause:
+            yield trellis.Pause
+        if isinstance(result.value, failure.Failure):
+            try:
+                result.value.raiseException()
+            finally:
+                del result  # get rid of the traceback reference cycle
+        yield trellis.Return(result.value)
+
+You would then use it like this (Python 2.5)::
+
+    result = wait_for(someTwistedFuncReturningADeferred(...))
+
+Or like this (compatible with earlier Python versions)::
+
+    wait_for(someTwistedFuncReturningADeferred(...)); result = trellis.resume()
+
+``wait_for()`` creates a cell and adds its ``set_value()`` method as a callback
+to the deferred, to receive either a value or an error.  It then waits until
+the callback occurs, by yielding ``Pause`` objects.  If the result is a Twisted
+``Failure``, it raises the exception represented by the failure.  Otherwise,
+it wraps the result in a ``trellis.Return()`` and yields it to its calling
+task, where it will be received as the result of the ``yield`` expression
+(in Python 2.5) or of the ``trellis.resume()`` call (versions <2.5).
+
+
+Time, Tasks, and Changes
+------------------------
+
+Note, by the way, that when we say the generator above will "wait" until the
+callback occurs, we actually mean no such thing!  What *really* happens is that
+this generator yields ``Pause``, recalculation finishes normally, and control
+is returned to whatever non-Trellis code caused a recalculation to occur in
+the first place.  Then, later, when the deferred fires and a callback occurs to
+set the ``result`` cell's value, this *triggers a recalculation sweep*, in
+which the generator is resumed in order to carry out the rest of its task!
+
+When it yields the result or raises an exception, this is propagated back to
+whatever generator "called" this one, which may then go on to do other things
+with the value or exception before it pauses or returns.  The recalculation
+sweep once again finishes normally, and control is returned back to the code
+that caused the deferred to fire.
+
+Thus, "time" in the Trellis (and especially for tasks) moves forward only when
+something *changes*.  It's the setting of cell values that triggers
+recalculation sweeps, and tasks only resume during sweeps where one of their
+dependencies have changed.
+
+A task is considered to depend on any cells whose value it has read since the
+last time it (or a subtask) yielded a ``Pause``.  Each time a task pauses, its
+old dependencies are thrown out, and a new set are accumulated.
+
+A task must also ``Pause`` in order to see the effects of any changes it makes
+to cells.  For example::
+
+    >>> c = trellis.Cell(value=27)
+    >>> c.value
+    27
+    
+    >>> def demo_task():
+    ...     c.value = 19
+    ...     print c.value
+    ...     yield trellis.Pause
+    ...     print c.value
+
+    >>> trellis.TaskCell(demo_task).value
+    27
+    19
+
+As you can see, changing the value of a cell inside a task is like changing it
+inside a ``@modifier`` or ``@action`` -- the change doesn't take effect until
+a new recalculation occurs, and the *current* recalculation can't finish until
+the task yields a ``Pause`` or returns (i.e., exits entirely).
+
+In this example, the task is resumed immediately after the pause because the
+task depended on ``c.value`` (by printing it), and its value *changed* in the
+subsequent sweep (because the task set it).  So the task was resumed
+immediately, as part of the second recalculation sweep (which happened only
+because there was a change in the first sweep).
+
+But what if a task doesn't have any dependencies?  If it doesn't depend on
+anything, how does it get resumed after a pause?  Let's see what happens::
+
+    >>> def demo_task():
+    ...     print 1
+    ...     yield trellis.Pause
+    ...     print 2
+
+    >>> trellis.TaskCell(demo_task).value
+    1
+    2
+
+As you can see, a task with no dependencies, (i.e., one that hasn't looked at
+any cells since its last ``Pause``), is automatically resumed.  The Trellis
+effectively pretends that the task both set and depended on an imaginary cell,
+forcing another recalculation sweep (if one wasn't already in the works due
+to other changes or the need to reset some discrete cells).  This prevents
+tasks from accidently suspending themselves indefinitely.
+
+Notice, by the way, that this makes Trellis-style multitasking rather unique
+in the world of Python event-driven systems and co-operative multitasking
+tools.  Most such systems require something like an "event loop", "reactor",
+"trampoline", or similar code that runs in some kind of loop to manage tasks
+like these.  But the Trellis doesn't need a loop of its own: it can use
+whatever loop(s) already exist in a program, and simply respond to changes as
+they occur.
+
+In fact, you can have one set of Trellis components in one thread responding to
+changes triggered by callbacks from Twisted's reactor, and another set of
+components in a different thread, being triggered by callbacks from a GUI
+event loop.  Heck, you can have them both happening in the *same* thread!  The
+Trellis really doesn't care.  (However, you can't share any trellis components
+across threads, or use them to communicate between threads.  In the future,
+the ``TrellisIO`` package will probably include mechanisms for safely
+communicating between cells in different threads.)
 
 
 Garbage Collection
@@ -1704,6 +2151,19 @@ Open Issues
   * There should probably be a way to tell if a Cell ``.has_listeners()`` or
     ``.has_dependencies()``.  This will likely become important for TrellisIO,
     if not TrellisDB.
+
+  * There should probably be an easier way to reference cells directly, instead
+    of using Cells(ob)['name'] -- perhaps a ``.link`` property, similar to the
+    ``.future`` of "todo" cells, would make this easier.
+
+  * Currently, you can set the value of a new cell more than once, to different
+    values, as long as it hasn't been read yet.  This provides some additional
+    flexibility to constructors, but isn't really documented or fully
+    specified yet.
+
+  * The ``poll()`` and ``repeat()`` functions, as well as the
+    ``.ensure_recalculation()`` method of cells, are undocumented in this
+    release.
 
 TrellisDB
   * A system for processing relational-like records and "active queries" mapped
