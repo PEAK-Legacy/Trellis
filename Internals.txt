@@ -75,7 +75,7 @@ Getting or setting a cell attribute that has no cell in the object's
     >>> tc.F = 27
     Creating F cell for <class 'Converter'> instance
     >>> tc.F
-    200
+    27
 
     >>> tc.F = Cell(lambda: -tc.C)
     >>> tc.F
@@ -90,7 +90,7 @@ Cell factories are inherited by subclasses::
     >>> tc2.F = -40
     Creating F cell for <class 'Converter2'> instance
     >>> tc2.F
-    -80.0
+    -40
 
 
 TodoProperty
@@ -1000,18 +1000,18 @@ Cell and Component Initialization
 
 This bit tests whether a rule gets to fire when a cell's value is initialized.
 When you set a ruled cell's value before computing its value, the "old" value
-should be the passed-in value, and the "new" value should be the result of the
-rule running::
+should be the passed-in value, and the "new" value should be the assigned
+value (overriding the rule)::
 
     >>> def aRule():
-    ...     print "running"
+    ...     print "running", c.value
     ...     return 42
 
     >>> c = Cell(aRule, 96)
     >>> c.value = 27
-    running
+    running 27
     >>> c.value
-    42
+    27
 
 And if the setting occurs in a modifier or action rule, the rule's execution
 should be deferred until the current calculation/rule is complete, thereby
@@ -1023,9 +1023,9 @@ allowing several cells to be simultaneously pre-set and initialized at once::
     ...     print "finished setting"
     >>> modifier(go)()
     finished setting
-    running
+    running 27
     >>> c.value
-    42
+    27
 
 Component __init__ code always runs as though it were inside an @action or
 @modifier, so that all attributes are initialized "simultaneously".

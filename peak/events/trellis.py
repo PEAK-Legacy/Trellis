@@ -89,23 +89,24 @@ class ReadOnlyCell(object):
         state[1] = self    # we are the observer while calculating/comparing
         try:
             new = self._writebuf
+            have_new = False
             if new is not _sentinel:
                 # We were assigned a value in the previous pulse
                 self._writebuf = _sentinel
                 have_new = True
-            else:
-                have_new = False
-                if self._rule:
-                    # We weren't assigned a value, see if we need to recalc
-                    for d in self._mailbox.dependencies:
-                        if (not d or d._changed_as_of is pulse
-                             or d._version is not pulse and d._check_dirty(state)
-                        ):  # one of our dependencies changed, recalc
-                            self._mailbox = m = Mailbox(self)  # break old deps
-                            new = self._rule(); have_new = True
-                            if not m.dependencies and self._can_freeze:
-                                have_new = _sentinel    # flag for freezing
-                            break   
+            if self._rule and (not have_new or self._changed_as_of==-1):
+                # We weren't assigned a value, see if we need to recalc
+                for d in self._mailbox.dependencies:
+                    if (not d or d._changed_as_of is pulse
+                         or d._version is not pulse and d._check_dirty(state)
+                    ):  # one of our dependencies changed, recalc
+                        self._mailbox = m = Mailbox(self)  # break old deps
+                        if self._changed_as_of==-1: self._rule(); dirty()
+                        else: new = self._rule()
+                        have_new = True
+                        if not m.dependencies and self._can_freeze:
+                            have_new = _sentinel    # flag for freezing
+                        break   
             if have_new:
                 previous = self._current_val
                 if self._reset is not _sentinel and new is not self._reset:
@@ -120,7 +121,6 @@ class ReadOnlyCell(object):
             else:
                 # No new value and not discrete?  Then no change.
                 return False
-    
             # We have a new value, but has it actually changed?
             if new is not previous and new != previous:
     
@@ -268,7 +268,7 @@ class Cell(ReadOnlyCell):
         #    raise RuntimeError("Can't access cells in another task/thread")
         if pulse is not self._version:
             if self._version is None:   # new, unread/unwritten cell
-                self._current_val = value
+                self._writebuf = self._current_val = value; self._changed_as_of = -1
                 ctrl.notify(self)   # schedule for recalc in this pulse
                 if not observer:
                     _cleanup(state)
