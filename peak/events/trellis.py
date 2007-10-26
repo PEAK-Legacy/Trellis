@@ -1,6 +1,6 @@
 from thread import get_ident
 from weakref import ref
-from peak.util import symbols, roles, decorators
+from peak.util import symbols, addons, decorators
 import sys, UserDict, UserList, sets
 
 __all__ = [
@@ -288,13 +288,13 @@ class Cell(ReadOnlyCell):
 def current_pulse():    return _get_state()[0]
 def current_observer(): return _get_state()[1]
 
-class CellValues(roles.Registry):
+class CellValues(addons.Registry):
     """Registry for cell values"""
 
-class CellRules(roles.Registry):
+class CellRules(addons.Registry):
     """Registry for cell rules"""
 
-class _Defaulting(roles.Registry):
+class _Defaulting(addons.Registry):
     def __init__(self, subject):
         self.defaults = {}
         return super(_Defaulting, self).__init__(subject)
@@ -326,7 +326,7 @@ def default_factory(typ, ob, name, celltype=Cell):
     return celltype(rule, value, IsDiscrete(typ).get(name, False))
 
 
-class Cells(roles.Role):
+class Cells(addons.AddOn):
     __slots__ = ()
     role_key = classmethod(lambda cls: '__cells__')
     def __new__(cls, subject): return {}

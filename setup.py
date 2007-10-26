@@ -35,6 +35,6 @@ setup(
     packages = PACKAGES,
     namespace_packages = PACKAGES,
     install_requires = [
-        'SymbolType>=1.0', 'ObjectRoles>=0.6', 'DecoratorTools>=1.5',
+        'SymbolType>=1.0', 'AddOns>=0.6', 'DecoratorTools>=1.5',
     ],
 )
