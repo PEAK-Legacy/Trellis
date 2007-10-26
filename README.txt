@@ -289,7 +289,7 @@ we didn't, it becomes read-only::
       ...
     AttributeError: Constants can't be changed
 
-Even though we can override the initial value when the component is created,
+...even though we can override the initial value when the component is created,
 or any time before it is first read::
 
     >>> d = Demo(aDict={3:4})
@@ -572,7 +572,7 @@ implement generic controllers.
 Creating Generic Controllers by Sharing Cells
 ---------------------------------------------
 
-Let's create a couple of generic "Spinner" controller, that take a pair of
+Let's create a couple of generic "Spinner" controllers, that take a pair of
 "increase" and "decrease" receivers, and hook them up to our changeable
 rectangle::
 
@@ -1150,7 +1150,7 @@ disallowed, because they would have to return the same value no matter how
 many times you called it during the same recalculation!  (Otherwise, the
 change hasn't really been deferred.)
 
-This limitation also applied to the ``pop()`` method of ``List`` and ``Set``
+This limitation also applies to the ``pop()`` method of ``List`` and ``Set``
 objects, as we'll see in the next two sections.
 
 
@@ -1200,12 +1200,9 @@ Note, however, that you cannot use the ``.pop()`` method of ``Set`` objects::
       ...
     InputConflict: Can't read and write in the same operation
 
-Remember: the trellis wants all changes to be deferred until the next
-recalculation.  That means you can't see the effect of a change in the same
-moment during which you *make* the change, so operations like ``pop()`` are
-disallowed, because they would have to return the same value no matter how
-many times you called it during the same recalculation!  (Otherwise, the
-change hasn't really been deferred.)
+Remember: as with ``trellis.Dict``, operations like ``pop()`` are disallowed
+here because they would require reading the effect of a change, before the
+logical future moment in which the change actually takes effect.
 
 
 trellis.List
@@ -1266,12 +1263,10 @@ Note, however, that you cannot use the ``.pop()`` method of ``List`` objects::
       ...
     InputConflict: Can't read and write in the same operation
 
-Remember: the trellis wants all changes to be deferred until the next
-recalculation.  That means you can't see the effect of a change in the same
-moment during which you *make* the change, so operations like ``pop()`` are
-disallowed, because they would have to return the same value no matter how
-many times you called it during the same recalculation!  (Otherwise, the
-change hasn't really been deferred.)
+Remember: as with ``trellis.Dict`` and ``trellis.Set``, operations like
+``pop()`` are disallowed here because they would require reading the effect of
+a change, before the logical future moment in which the change actually takes
+effect.
 
 ``trellis.List`` objects also have some inherent inefficiencies due to the wide
 variety of operations supported by Python lists.  While ``trellis.Set``
@@ -1688,9 +1683,9 @@ third constructor argument (i.e., ``discrete``) to true::
 As you can see, the value a discrete cell is created with, is the default value
 it resets to between received (or calculated) values.  If you want to make
 a discrete rule, just include a rule in addition to the default value and the
-discrete fla.g
+discrete flag.
 
-To make an "action" cell, use ``trellis.ActionCell``::
+"Action" cells are implemented with the ``trellis.ActionCell`` class::
 
     >>> trellis.Cells(view)['view_it']
     ActionCell(<bound method Viewer.view_it of
