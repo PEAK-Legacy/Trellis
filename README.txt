@@ -467,7 +467,7 @@ easy to do this, using rules that refer to their previous value::
     6
     >>> nf.threshhold = 3   # changing the threshhold re-runs the filter...
     >>> nf.filtered
-    10    
+    10
     >>> nf.value = -3
     >>> nf.filtered
     -3
@@ -677,7 +677,7 @@ new high temperature is seen::
     >>> class HighDetector(trellis.Component):
     ...     value = trellis.value(0)
     ...     max_and_new = trellis.value((None, False))
-    ... 
+    ...
     ...     @trellis.rule
     ...     def max_and_new(self):
     ...         last_max, was_new = self.max_and_new
@@ -686,11 +686,11 @@ new high temperature is seen::
     ...         elif self.value > last_max:
     ...             return self.value, True
     ...         return last_max, False
-    ... 
+    ...
     ...     trellis.rules(
     ...         new_high = lambda self: self.max_and_new[1]
     ...     )
-    ... 
+    ...
     ...     @trellis.action
     ...     def monitor(self):
     ...         if self.new_high:
@@ -1532,7 +1532,7 @@ cell to be replaced!).  In addition to the ``.value`` attribute, there are also
 
     >>> F.get_value()
     -40.0
-    
+
 These can be useful if you need to register callbacks with other systems.  For
 example, you could use a cell's ``set_value()`` method as a callback for a
 Twisted "deferred" object, so that the cell would receive the deferred's value
@@ -1546,7 +1546,7 @@ Here's our earlier "noise filter" example, reconstituted as a set of cells::
     ...     if abs(value.value - filtered.value) > threshhold.value:
     ...         return value.value
     ...     return filtered.value
-    
+
     >>> filtered = trellis.Cell(filtered, 0)
 
     >>> filtered.value
@@ -1607,7 +1607,7 @@ cell, it will not end up depending on it::
 
     >>> cell2
     Constant(123)
-    
+
 Thus, constant values propagate automatically through the cell network,
 eliminating dependencies on things that can't possibly change.  Of course, if a
 read-only cell depends on a cell that *can* change, it remains a read-only
@@ -1643,7 +1643,7 @@ eliminating the need for the ``filtered`` rule to check for changes to the
 
 
 Working With A Component's Cells
---------------------------------    
+--------------------------------
 
 As we saw in the main tutorial, the ``trellis.Cells()`` API returns a
 dictionary of active cells for a component::
@@ -1795,17 +1795,17 @@ can rewrite our example like this, for more modularity::
     ...         start = False,
     ...         stop = False
     ...     )
-    ... 
+    ...
     ...     def wait_for_start(self):
     ...         print "waiting to start"
     ...         while not self.start:
     ...             yield trellis.Pause
-    ... 
+    ...
     ...     def wait_for_stop(self):
     ...         while not self.stop:
     ...             print "waiting to stop"
     ...             yield trellis.Pause
-    ... 
+    ...
     ...     @trellis.task
     ...     def demo(self):
     ...         yield self.wait_for_start()
@@ -1929,7 +1929,7 @@ to cells.  For example::
     >>> c = trellis.Cell(value=27)
     >>> c.value
     27
-    
+
     >>> def demo_task():
     ...     c.value = 19
     ...     print c.value
@@ -1986,6 +1986,348 @@ Trellis really doesn't care.  (However, you can't share any trellis components
 across threads, or use them to communicate between threads.  In the future,
 the ``TrellisIO`` package will probably include mechanisms for safely
 communicating between cells in different threads.)
+
+
+Managing Activities in "Clock Time"
+===================================
+
+(NEW in 0.6a1)
+
+Real-life applications often need to work with intervals of physical or "real"
+time, not just logical "Trellis time".  In addition, they often need to manage
+sequential or simultaneous activities.  For example, a desktop application may
+have background tasks that perform synchronization, download mail, etc.  A
+server application may have logical tasks handling requests, and so on.  These
+activities may need to start or stop at various times, manage timeouts, display
+or log progress, etc.
+
+So, the ``peak.events.activity`` module includes support for time tracking as
+well as controlling activities and monitoring their progress.
+
+
+Timers and the Time Service
+---------------------------
+
+The Trellis measures time using "timers".  A timer represents a moment in time,
+but you can't tell directly *what* moment it represents.  All you can do is
+measure the interval between two timers, or tell whether the moment defined by
+a timer has been reached.
+
+The "zero" timer is ``activity.EPOCH``, representing an arbitrary starting
+point in relative time::
+
+    >>> from peak.events.activity import EPOCH
+    >>> t = EPOCH
+    >>> t
+    <...activity._Timer object at ...>
+
+
+Static Time Calculations
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+As you can see, timer objects aren't very informative by themselves.  However,
+you can use subscripting to create new timers relative to an existing timer,
+and subtract timers from each other to produce an interval in seconds, e.g.::
+
+    >>> t10 = t[10]
+    >>> t10 - t
+    10
+
+    >>> t10[-10] - t
+    0
+
+    >>> t10[3] - t
+    13
+
+Timers compare equal to one another, if and only if they represent the same
+moment::
+
+    >>> t==t
+    True
+    >>> t!=t
+    False
+    >>> t10[-10] == t
+    True
+    >>> t10[-10] != t
+    False
+
+And the other comparison operators work on timers according to their relative
+positions in time, e.g.:
+
+    >>> t[-1] < t <= t[1]
+    True
+    >>> t[-1] > t[-2]
+    True
+    >>> t[-2] > t[-1]
+    False
+    >>> t[-1] >= t[-1]
+    True
+    >>> t<=t
+    True
+    >>> t<=t[1]
+    True
+    >>> t<=t[-1]
+    False
+
+
+Dynamic Time Calculations
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Of course, if arithmetic were all you could do with timers, they wouldn't be
+very useful.  Their real value comes when you perform dynamic time calculations,
+to answer questions like "How long has it been since X happened?", or "Has
+Y seconds elapsed since X happened?"  And of course, we want any rules that
+ask these questions to be recalculated if the answers change!
+
+This is where the ``activity.Time`` service comes into play.  The ``Time``
+class is a ``context.Service`` (see the Contextual docs for more details) that
+tracks the current time, and takes care of letting the Trellis know when a rule
+needs to be recalculated because of a change in the current time.
+
+By default, the ``Time`` service uses ``time.time()`` to track the current
+time, whenever a trellis value is changed.  But to get consistent timings
+while testing, we'll turn this automatic updating off::
+
+    >>> from peak.events.activity import Time
+    >>> Time.auto_update = False
+
+With auto-update off, the time will only advance if we explicitly call
+``Time.tick()`` or ``Time.advance()``.  ``tick()`` updates the current time
+to match ``time.time()``, while ``Time.advance()`` moves the time ahead by a
+specified amount (so you can run tests in "simulated time" with perfect
+repeatability).
+
+So now let's do some dynamic time calculations.  In most programs, what you
+need to know in a rule is whether a certain amount of time has elapsed
+since something has happened, or whether a certain future time has arrived.
+
+To do that, you can simply create a timer for the desired moment, and check its
+boolean (truth) value::
+
+    >>> twenty = Time[20]    # go off 20 secs. from now
+    >>> bool(twenty)         # but we haven't gone off yet
+    False
+
+    >>> Time.advance(5)
+    >>> bool(twenty)         # not time yet...
+    False
+
+    >>> Time.advance(15)     # bingo!
+    >>> bool(twenty)
+    True
+
+    >>> Time.advance(7)
+    >>> bool(twenty)    # remains true even after the exact moment has passed
+    True
+
+And of course, you can use this boolean test in a rule, to trigger some action::
+
+    >>> class AlarmClock(trellis.Component):
+    ...     trellis.values(timeout = None)
+    ...     def alert(self):
+    ...         if self.timeout:
+    ...             print "timed out!"
+    ...     alert = trellis.rule(alert)
+
+    >>> clock = AlarmClock(timeout=Time[20])
+    >>> Time.advance(15)
+    >>> Time.advance(15)
+    timed out!
+
+Notice, by the way, that the ``Time`` service can be subscripted with a value
+in seconds, to get a timer representing that many seconds from the current
+time.  (However, ``Time`` is not really a timer object, so don't try to use it
+as one!)
+
+
+Elapsed Time Tracking
+~~~~~~~~~~~~~~~~~~~~~
+
+This alarm implementation works by getting a future timer (``timeout``), and
+then "goes off" when that future moment is reached.  However, we can also
+create an "elapsed" timer, and trigger when a certain amount of time has
+passed::
+
+    >>> class Elapsed(trellis.Component):
+    ...     trellis.values(duration = 20)
+    ...     trellis.rules(has_run_for = lambda self: Time[0])
+    ...
+    ...     def alarm(self):
+    ...         if self.has_run_for[self.duration]:
+    ...             print "timed out!"
+    ...     alarm = trellis.rule(alarm)
+
+    >>> t = Elapsed()       # Capture a start time
+    >>> Time.advance(15)    # duration is 20, so no alarm yet
+
+    >>> t.duration = 10     # duration changed, and already reached
+    timed out!
+
+    >>> t.duration = 15     # duration changed, but still reached
+    timed out!
+
+    >>> t.duration = 20     # not reached yet...
+
+    >>> Time.advance(5)
+    timed out!
+
+As you can see, the ``has_run_for`` attribute is a timer that records the
+moment when the ``Elapsed`` instance is created.  The ``alarm`` rule is then
+recalculated whenever the ``duration`` changes -- or elapses.
+
+Of course, in complex programs, one usually needs to be able to measure the
+amount of time that some condition has been true (or false).  For example, how
+long a process has been idle (or busy)::
+
+    >>> from peak.events.activity import NOT_YET
+
+    >>> class IdleTimer(trellis.Component):
+    ...     trellis.values(
+    ...         idle_for = NOT_YET,
+    ...         idle_timeout = 20,
+    ...         busy = False,
+    ...     )
+    ...     trellis.rules(
+    ...         idle_for = lambda self:
+    ...             self.idle_for.begins_with(not self.busy)
+    ...     )
+    ...     def alarm(self):
+    ...         if self.idle_for[self.idle_timeout]:
+    ...             print "timed out!"
+    ...     alarm = trellis.rule(alarm)
+
+The way this code works, is that initially the ``idle_for`` timer is equal to
+the special ``NOT_YET`` value, representing a moment that will never be
+reached.
+
+The ``begins_for()`` method of timer objects takes a boolean value.  If the
+value is false, ``NOT_YET`` is returned.  If the value is true, the lesser of
+the existing timer value or ``Time[0]`` (the present moment) is returned.
+
+Thus, a statement like::
+
+    a_timer = a_timer.begins_with(condition)
+
+ensures that ``a_timer`` equals the most recent moment at which ``condition``
+was observed to become true.  (Or ``NOT_YET``, in the case where ``condition``
+is false.)
+
+So, the ``IdleTimer.alarm`` rule effectively checks whether ``busy`` has been
+false for more than ``idle_timeout`` seconds.  If ``busy`` is currently true,
+then ``self.idle_for`` will be ``NOT_YET``, and subscripting ``NOT_YET``
+always returns ``NOT_YET``.  Since ``NOT_YET`` is a moment that can never be
+reached, the boolean value of the expression is always false while ``busy``
+is true.
+
+Let's look at the ``IdleTimer`` in action::
+
+    >>> it = IdleTimer()
+    >>> it.busy = True
+    >>> Time.advance(30)    # busy for 30 seconds
+
+    >>> it.busy = False
+    >>> Time.advance(10)    # idle for 10 seconds, no timeout yet
+
+    >>> Time.advance(10)    # ...20 seconds!
+    timed out!
+
+    >>> Time.advance(15)    # idle 35 seconds, no new timeout
+
+    >>> it.busy = True      # busy again
+    >>> Time.advance(5)     # for 5 seconds...
+
+    >>> it.busy = False
+    >>> Time.advance(30)    # idle 30 seconds, timeout!
+    timed out!
+
+    >>> it.idle_timeout = 15    # already at 30, fires again
+    timed out!
+
+
+Automatically Advancing the Time
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In our examples, we've been manually updating the time.  But if ``auto_update``
+is true, then the time automatically advances whenever a trellis value is
+changed::
+
+    >>> Time.auto_update = True
+    >>> c = trellis.Cell()
+    >>> c.value = 42
+
+    >>> now = Time[0]
+    >>> from time import sleep
+    >>> sleep(0.1)
+
+    >>> now == Time[0]  # time hasn't actually moved forward yet...
+    True
+
+    >>> c.value = 24
+    >>> now == Time[0]  # but now it has, since a recalculation occurred
+    False
+
+This ensures that any rules that use a current time value, or that are waiting
+for a timeout, will see the correct time.
+
+Note, however, that if your application doesn't change any trellis values for a
+long time, then any pending timeouts may not fire for an excessive period of
+time.  You can, however, force an update to occur by using the ``Time.tick()``
+method::
+
+    >>> now = Time[0]
+    >>> sleep(0.1)
+    >>> now == Time[0]  # time hasn't actually moved forward yet...
+    True
+    
+    >>> Time.tick()
+    >>> now == Time[0]  # but now it has!
+    False
+
+So, an application's main loop can call ``Time.tick()`` repeatedly in order to
+ensure that any pending timeouts are being fired.
+
+You can reduce the number of ``tick()`` calls significantly, however, if you
+make use of the ``next_event_time()`` method.  If there are no scheduled events
+pending, it returns ``None``::
+
+    >>> print Time.next_event_time()
+    None
+
+But if anything is waiting, like say, our ``IdleTimeout`` object from the
+previous section, it returns the relative or absolute time of the next time
+``tick()`` will need to be called::
+
+    >>> it = IdleTimer(idle_timeout=30)
+
+    >>> Time.next_event_time(relative=True)
+    30.0
+
+    >>> when = EPOCH[Time.next_event_time(relative=False)]
+    >>> when - Time[0]
+    30.0
+
+(We can't show the absolute time in this example, because it would change every
+time this document was run.  But we can offset it from ``EPOCH``, and then
+subtract it from the current time, to prove that it's equal to an absolute time
+30 seconds after the current time.)
+
+Armed with this method, you can now write code for your application's event
+loop that calls ``tick()`` at the appropriate interval.  You will simply need
+to define a Trellis rule somewhere that monitors the ``next_event_time()`` and
+schedules a call to ``Time.tick()`` if the next event time is not None.  You
+can use whatever scheduling mechanism your application already includes, such
+as a ``wx.Timer`` or Twisted's ``reactor.callLater``, etc.
+
+When the scheduled call to ``tick()`` occurs, your monitoring rule will be
+run again (because ``next_event_time()`` depends on the current time), thus
+repeating the cycle as often as necessary.
+
+Note, however, that your rule may be run again *before* the scheduled
+``tick()`` occurs, and so may end up scheduling extra calls to ``tick()``.
+This should be harmless, however, but if you want to avoid the repeats you can
+always write your rule so that it updates the existing scheduled call time, if
+one is pending.  (E.g. by updating the ``wx.Timer`` or changing the Twisted
+"appointment".)
 
 
 Garbage Collection
