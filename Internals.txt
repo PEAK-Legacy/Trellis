@@ -313,7 +313,7 @@ Decorators
      'todo': <function todo_factory...>}
 
     >>> IsOptional(Test)
-    {'anEvent': False, 'optRule': True, 'aRule': False, 'todo': False}
+    {'anEvent': False, 'optRule': True, 'aRule': True, 'todo': False}
 
 
     >>> class Test(object):
@@ -459,10 +459,10 @@ the rule::
     >>> x = Cell(value=27)
     >>> class Test(Component):
     ...     rules(x = lambda self: x.value)
-    >>> def rule():
+    >>> def _rule():
     ...     print "creating"
     ...     Test()
-    >>> r = Cell(rule)
+    >>> r = Cell(_rule)
     >>> r.value
     creating
     >>> x.value = 99
@@ -477,6 +477,25 @@ replace it with a constant::
     Constant(())
 
 XXX better error message for write to read-only cell
+
+
+A component should not create cells for attributes that are not cell properties
+(e.g., due to override in a subclass)::
+
+    >>> class Test(Component):
+    ...     decorate(rule)
+    ...     def attr(self):
+    ...         print "computing"
+
+    >>> Test()
+    computing
+    <Test object at ...>
+
+    >>> class Test2(Test):
+    ...     attr = None
+
+    >>> Test2()     # attr should not be initialized
+    <Test2 object at ...>
 
 
 Cell Objects
@@ -955,7 +974,7 @@ Sets
     Traceback (most recent call last):
       ...
     KeyError: 2
-    
+
     >>> s.symmetric_difference_update((1,2))
     added = [1, 2]
 
@@ -1034,7 +1053,7 @@ Component __init__ code always runs as though it were inside an @action or
     ...     def __init__(self):
     ...         c.value = 1  # this sets the value as of the *previous* pulse
     ...         c.value = 2  # this one sets the value for *this* pulse
-    
+
     >>> Dummy()
     Traceback (most recent call last):
       ...

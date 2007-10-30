@@ -288,12 +288,6 @@ class Cell(ReadOnlyCell):
 def current_pulse():    return _get_state()[0]
 def current_observer(): return _get_state()[1]
 
-class CellValues(addons.Registry):
-    """Registry for cell values"""
-
-class CellRules(addons.Registry):
-    """Registry for cell rules"""
-
 class _Defaulting(addons.Registry):
     def __init__(self, subject):
         self.defaults = {}
@@ -304,14 +298,20 @@ class _Defaulting(addons.Registry):
             self.setdefault(k, v)
         return super(_Defaulting, self).created_for(cls)
 
-class CellFactories(_Defaulting):
-    """Registry for cell factories"""
+class CellFactories(_Defaulting):     """Registry for cell factories"""
+class CellValues(addons.Registry):    """Registry for cell values"""
+class CellRules(addons.Registry):     """Registry for cell rules"""
+class IsDiscrete(_Defaulting): "Registry for flagging that a cell is an event"
 
 class IsOptional(_Defaulting):
     """Registry for flagging that an attribute need not be activated"""
-
-class IsDiscrete(_Defaulting):
-    """Registry for flagging that a cell is an event"""
+    def created_for(self, cls):
+        _Defaulting.created_for(self, cls)
+        for k in self:
+            if k in cls.__dict__ \
+            and not isinstance(cls.__dict__[k], CellProperty):
+                # Don't create a cell for overridden non-CellProperty attribute 
+                self[k] = True
 
 def default_factory(typ, ob, name, celltype=Cell):
     """Default factory for making cells"""
@@ -443,7 +443,7 @@ class Component(object):
 
         pulse, observer, ctrl = state = _get_state()
         for k, v in IsOptional(cls).iteritems():
-            if not v and k not in cells and isinstance(getattr(cls,k),CellProperty):
+            if not v and k not in cells:# and isinstance(getattr(cls,k),CellProperty):
                 ctrl.notify(
                     cells.setdefault(k, CellFactories(cls)[k](cls, self, k))
                 )
