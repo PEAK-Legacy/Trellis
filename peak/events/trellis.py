@@ -328,7 +328,7 @@ def default_factory(typ, ob, name, celltype=Cell):
 
 class Cells(addons.AddOn):
     __slots__ = ()
-    role_key = classmethod(lambda cls: '__cells__')
+    addon_key = classmethod(lambda cls: '__cells__')
     def __new__(cls, subject): return {}
 
 def rule(func):
@@ -414,13 +414,21 @@ class Component(decorators.classy):
     __slots__ = ()
 
     decorators.decorate(classmethod)
-    def __class_call__(self, *args, **kw):
+    def __class_call__(cls, *args, **kw):
         pulse, observer, ctrl = state = _get_state()
         if observer is not None and observer._is_action:
-            return super(Component, self).__class_call__(*args, **kw)
+            return super(Component, cls).__class_call__(*args, **kw)
         state[1] = ctrl.action
         try:
-            rv = type.__call__(self, *args, **kw)
+            rv = super(Component, cls).__class_call__(*args, **kw)
+            if isinstance(rv, cls):
+                cells = Cells(rv)
+                for k, v in IsOptional(cls).iteritems():
+                    if not v and k not in cells:
+                        ctrl.notify(
+                            cells.setdefault(k,
+                                CellFactories(cls)[k](cls, rv, k))
+                        )
         finally:
             state[1] = observer
         if observer is None:
@@ -428,22 +436,14 @@ class Component(decorators.classy):
         return rv
             
     def __init__(self, **kw):
-        cls = type(self)
-        self.__cells__ = cells = Cells(self)
-        for k, v in kw.iteritems():
-            if not hasattr(cls, k):
-                raise TypeError("%s() has no keyword argument %r"
-                    % (cls.__name__, k)
-                )
-            setattr(self, k, v)
-
-        pulse, observer, ctrl = state = _get_state()
-        for k, v in IsOptional(cls).iteritems():
-            if not v and k not in cells:
-                ctrl.notify(
-                    cells.setdefault(k, CellFactories(cls)[k](cls, self, k))
-                )
-
+        if kw:
+            cls = type(self)
+            for k, v in kw.iteritems():
+                if not hasattr(cls, k):
+                    raise TypeError("%s() has no keyword argument %r"
+                        % (cls.__name__, k)
+                    )
+                setattr(self, k, v)
 
 
 
@@ -584,28 +584,34 @@ class CellProperty(object):
     def __get__(self, ob, typ=None):
         if ob is None:
             return self
+        try: cells = ob.__cells__
+        except AttributeError: cells = Cells(ob)
         try:
-            cell = ob.__cells__[self.__name__]
+            cell = cells[self.__name__]
         except KeyError:
             name = self.__name__
-            cell =  CellFactories(typ)[name](typ, ob, name)
-            cell = ob.__cells__.setdefault(name, cell)
+            cell = CellFactories(typ)[name](typ, ob, name)
+            cell = cells.setdefault(name, cell)
         return cell.value
 
     def __set__(self, ob, value):
+        try: cells = ob.__cells__
+        except AttributeError: cells = Cells(ob)
         if isinstance(value, ReadOnlyCell):
-            ob.__cells__[self.__name__] = value
+            cells[self.__name__] = value
         else:
             try:
-                cell = ob.__cells__[self.__name__]
+                cell = cells[self.__name__]
             except KeyError:
                 name = self.__name__
                 typ = type(ob)
                 cell =  CellFactories(typ)[name](typ, ob, name)
                 if not cell._writable:
-                    return ob.__cells__.setdefault(name, Constant(value))
-                cell = ob.__cells__.setdefault(name, cell)
+                    return cells.setdefault(name, Constant(value))
+                cell = cells.setdefault(name, cell)
             cell.value = value
+
+
 
     def __eq__(self, other):
         return type(other) is type(self) and other.__name__==self.__name__
@@ -661,12 +667,14 @@ class TodoProperty(CellProperty):
         """Get a read-only property for the "future" of this attribute"""
         name = self.__name__
         def get(ob):
+            try: cells = ob.__cells__
+            except AttributeError: cells = Cells(ob)
             try:
-                cell = ob.__cells__[name]
+                cell = cells[name]
             except KeyError:
                 typ = type(ob)
                 cell = CellFactories(typ)[name](typ, ob, name)
-                cell = ob.__cells__.setdefault(name, cell)
+                cell = cells.setdefault(name, cell)
             if cell._writebuf is _sentinel:
                 pulse, observer, ctrl = _get_state()
                 if not observer or not observer._is_action:
