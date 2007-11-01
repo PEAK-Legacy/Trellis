@@ -124,8 +124,6 @@ NOT_YET = _Timer(Max)
 class Time(trellis.Component, context.Service):
     """Manage current time and intervals"""
 
-    class __metaclass__(trellis.ComponentClass, context.ServiceClass): pass
-
     _tick = trellis.value(EPOCH._when)
     auto_update = trellis.value(True)
     _now   = EPOCH._when
@@ -161,6 +159,8 @@ class Time(trellis.Component, context.Service):
             self._events[when] = e = \
                 trellis.Cell(lambda: e.value or when in self._updated, False)
         return self._events[when].value
+
+
 
     def __getitem__(self, interval):
         """Return a timer that's the given offset from the current time"""

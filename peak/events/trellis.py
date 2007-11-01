@@ -408,13 +408,16 @@ def action(func):
     )
 
 
-class ComponentClass(type):
-    """Metaclass that ensures components are created atomically"""
+class Component(decorators.classy):
+    """Base class for objects with Cell attributes"""
 
-    def __call__(self, *args, **kw):
+    __slots__ = ()
+
+    decorators.decorate(classmethod)
+    def __class_call__(self, *args, **kw):
         pulse, observer, ctrl = state = _get_state()
         if observer is not None and observer._is_action:
-            return type.__call__(self, *args, **kw)
+            return super(Component, self).__class_call__(*args, **kw)
         state[1] = ctrl.action
         try:
             rv = type.__call__(self, *args, **kw)
@@ -423,14 +426,7 @@ class ComponentClass(type):
         if observer is None:
             _cleanup(state)
         return rv
-
             
-class Component(object):
-    """Base class for objects with Cell attributes"""
-
-    __slots__ = ()
-    __metaclass__ = ComponentClass
-    
     def __init__(self, **kw):
         cls = type(self)
         self.__cells__ = cells = Cells(self)
@@ -443,10 +439,14 @@ class Component(object):
 
         pulse, observer, ctrl = state = _get_state()
         for k, v in IsOptional(cls).iteritems():
-            if not v and k not in cells:# and isinstance(getattr(cls,k),CellProperty):
+            if not v and k not in cells:
                 ctrl.notify(
                     cells.setdefault(k, CellFactories(cls)[k](cls, self, k))
                 )
+
+
+
+
 
 
 def repeat():
