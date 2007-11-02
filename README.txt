@@ -2306,6 +2306,9 @@ previous section, it returns the relative or absolute time of the next time
     >>> when - Time[0]
     30.0
 
+    >>> Time.advance(30)
+    timed out!
+
 (We can't show the absolute time in this example, because it would change every
 time this document was run.  But we can offset it from ``EPOCH``, and then
 subtract it from the current time, to prove that it's equal to an absolute time
@@ -2328,6 +2331,44 @@ This should be harmless, however, but if you want to avoid the repeats you can
 always write your rule so that it updates the existing scheduled call time, if
 one is pending.  (E.g. by updating the ``wx.Timer`` or changing the Twisted
 "appointment".)
+
+
+Event Loops
+-----------
+
+    >>> def hello(*args, **kw):
+    ...     print "called with", args, kw
+
+    >>> from peak.events.activity import EventLoop
+    >>> Time.auto_update = False    # test mode
+
+    >>> EventLoop.call(hello, 1, a='b')
+    >>> EventLoop.call(hello, 2)
+    >>> EventLoop.call(hello, this=3)
+    >>> EventLoop.call(EventLoop.stop)
+
+    >>> EventLoop.run()
+    called with (1,) {'a': 'b'}
+    called with (2,) {}
+    called with () {'this': 3}
+
+    >>> EventLoop.stop()
+    Traceback (most recent call last):
+      ...
+    AssertionError: EventLoop isn't running    
+
+    >>> EventLoop.call(EventLoop.run)
+    >>> EventLoop.call(hello, 4)
+    >>> EventLoop.call(EventLoop.stop)
+    >>> EventLoop.run()
+    Traceback (most recent call last):
+      ...
+    AssertionError: EventLoop is already running    
+
+    >>> it = IdleTimer(idle_timeout=5)
+    >>> EventLoop.run()
+    called with (4,) {}
+    timed out!
 
 
 Garbage Collection
