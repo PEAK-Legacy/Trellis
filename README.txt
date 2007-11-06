@@ -369,8 +369,8 @@ For example::
     >>> view = Viewer(model=q2)
     Rectangle((0, 99), (20, 30), (20, 129))
 
-Now, any time we change q2, it will be printed by our ``q2_view`` rule, even
-though we haven't activated q2's ``show`` rule::
+Now, any time we change q2, it will be printed by the Viewer's ``view_it``
+rule, even though we haven't activated q2's ``show`` rule::
 
     >>> q2.left = 66
     Rectangle((66, 99), (20, 30), (86, 129))
