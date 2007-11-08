@@ -2200,7 +2200,7 @@ The way this code works, is that initially the ``idle_for`` timer is equal to
 the special ``NOT_YET`` value, representing a moment that will never be
 reached.
 
-The ``begins_for()`` method of timer objects takes a boolean value.  If the
+The ``begins_with()`` method of timer objects takes a boolean value.  If the
 value is false, ``NOT_YET`` is returned.  If the value is true, the lesser of
 the existing timer value or ``Time[0]`` (the present moment) is returned.
 
