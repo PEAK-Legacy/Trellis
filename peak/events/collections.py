@@ -1,9 +1,10 @@
 import trellis, bisect
 from peak.util import decorators
 from trellis import set
+from new import instancemethod
 
 __all__ = [
-    'SortedSet', # 'SubSet',
+    'SortedSet', 'SubSet', 'Observing',
 ]
 
 class SubSet(trellis.Set):
@@ -38,7 +39,47 @@ class SubSet(trellis.Set):
 
 
 
+class Observing(trellis.Component):
+    """Monitor a set of keys for changes"""
 
+    trellis.values(
+        lookup_func = lambda x:x,
+        changes = {},
+        watched_values = ({}, {}),
+        _watching = None
+    )
+
+    keys = trellis.rule(lambda self: trellis.Set())
+
+    decorators.decorate(trellis.rule)
+    def _watching(self):
+        cells = self._watching or {}
+        for k in self.keys.removed:
+            if k in cells:
+                del cells[k]
+                trellis.dirty()
+        lookup = self.lookup_func
+        for k in self.keys.added:
+            cells[k] = trellis.Cell(instancemethod(lookup, k, type(k)))
+            trellis.dirty()
+        return cells
+
+    decorators.decorate(trellis.rule)
+    def watched_values(self):
+        forget, old = self.watched_values
+        lookup = self.lookup_func
+        return old, dict([(k, v.value) for k,v in self._watching.iteritems()])
+        
+    decorators.decorate(trellis.discrete)
+    def changes(self):
+        old, current = self.watched_values
+        changes = {}
+        if old!=current:
+            for k,v in current.iteritems():
+                if k not in old or v!=old[k]:
+                    changes[k] = v, old.get(k, v)
+        return changes
+        
 class SortedSet(trellis.Component):
     """Represent a set as a list sorted by a key"""
 

@@ -158,17 +158,33 @@ index::
     >>> myIndex
     [0, 1, 4]
     
-XXX ``reversed`` flag, test changes to ``.data``
+TODO: ``reversed`` flag, test changes to ``.data``
 
 
 SubSet
 ------
 
+The ``SubSet`` type lets you create a ``Set`` that is constrained to be a
+subset of another set.  If items are removed from the ``base`` set, the same
+items are removed from the ``SubSet``::
+
     >>> s1 = trellis.Set([1,2,3])
-    >>> ss = collections.SubSet(base = s1)
+    >>> ss = collections.SubSet([2], base = s1)
+    >>> ss
+    SubSet([2])
+
+    >>> s1.remove(2)
+    >>> ss
+    SubSet([])
+    
+Adding an item to the ``SubSet`` when the item is not in the ``base`` set has
+no effect::
+
     >>> ss.add(4)
     >>> ss
     SubSet([])
+
+But you *can* add items that are currently in the base set::
 
     >>> ss.add(3)
     >>> ss
@@ -178,4 +194,72 @@ SubSet
     >>> ss
     SubSet([])
 
+
+TODO: changes to ``base`` do not affect the current subset membership
+
+
+Observing
+---------
+
+The ``Observing`` type is designed to assist in sending change notifications
+to GUI components that need to be told when a portion of the display is out
+of date.  It works by taking a set of keys and a lookup function, and providing
+a ``changes`` attribute.  Usually the lookup function will be an accessor on
+some trellis-ized data structure::
+
+    >>> data = trellis.List([1,2,3,4,5])
+    >>> o = collections.Observing(lookup_func = data.__getitem__)
+
+    >>> def show():
+    ...     print "Changes:", o.changes
+    >>> c = trellis.ActionCell(show)
+    >>> c.value
+    Changes: {}
+
+The ``changes`` attribute is a dictionary (a regular dictionary, not a
+``Dict``) that maps the observing instance's ``keys`` to ``(new, old)`` value
+tuples.  Whenever a change occurs to either the ``keys`` or their corresponding
+values, it becomes non-empty, and then reverts to being empty::
+
+    >>> o.keys.update([1,2,4])
+    Changes: {1: (2, 2), 2: (3, 3), 4: (5, 5)}
+    Changes: {}
+
+In the above example, the "new" and "old" values are the same, because the keys
+shown were all just added to the ``keys`` set.  However, if a value changes for
+a key that's already present in ``keys``, the "new" and "old" values will be
+different::
+
+    >>> data[1] = -2
+    Changes: {1: (-2, 2)}
+    Changes: {}
+
+    >>> o.keys.remove(2)    # removing key doesn't induce "changes"
+
+    >>> o.keys.add(3)       # but adding does
+    Changes: {3: (4, 4)}
+    Changes: {}
+
+    >>> data.reverse()      # and so does any change on the underlying data
+    Changes: {1: (4, -2), 3: (-2, 4), 4: (1, 5)}
+    Changes: {}
+
+The basic idea for using an ``Observing`` object is to update the ``keys`` to
+reflect the currently-visible row or column numbers (or other keys) of a data
+structure being displayed in a GUI.  Then, an ``@action`` rule that reads the
+``changes`` can notify the GUI of any changes that happen to the underlying
+data structure.
+
+You can, of course, do this without an ``Observing`` instance, but
+recalculations would be prohibitively expensive if the underlying data set is
+large, compared to the portion being displayed.  (E.g., when scrolling through
+an entire database.)
+
+So GUI applications that display grids or tables will typically use a
+``SortedSet`` to find out about rows or columns being inserted, deleted, or
+replaced, and an ``Observing`` instance to find out about changes *within* the
+rows or columns.
+
+TODO: ``changes`` doesn't update if you initialize ``keys`` with a populated
+set.
 
