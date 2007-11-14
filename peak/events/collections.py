@@ -7,6 +7,12 @@ __all__ = [
     'SortedSet', 'SubSet', 'Observing',
 ]
 
+decorators.struct()
+def _sort_state(items=None, key=None, reverse=False, changes=()):
+    """Data structure to hold SortedSet state"""
+    return items, key, reverse, changes
+
+
 class SubSet(trellis.Set):
     """Set that's constrained to be a subset of another set"""
 
@@ -30,12 +36,6 @@ class SubSet(trellis.Set):
             return set(self._removed) | set(self.base.removed)
         else:
             return self._removed
-
-
-
-
-
-
 
 
 
@@ -85,18 +85,20 @@ class SortedSet(trellis.Component):
 
     trellis.values(
         data = None,
-        state = None,
+        state = _sort_state(),
         sort_key  = lambda x:x,  # sort on the object
-        changes = []
+        changes = [],
+        reverse = False
     )
     trellis.rules(
         data = lambda self: trellis.Set(),
-        items = lambda self: self.state[0],
+        items = lambda self: self.state.items,
     )
-
-    changes = trellis.discrete(lambda self: self.state[2])
+    changes = trellis.discrete(lambda self: self.state.changes)
 
     def __getitem__(self, key):
+        if self.reverse:
+            key = -(key+1)
         return self.items[int(key)][1]
 
     def __len__(self):
@@ -104,24 +106,22 @@ class SortedSet(trellis.Component):
 
     decorators.decorate(trellis.rule)
     def state(self):
-        if self.state is None:
-            items, old_key, old_change = None, None, []
+        state, key, reverse = self.state, self.sort_key, self.reverse
+        data = state.items
+        if key != state.key or reverse != state.reverse:
+            if key != state.key or data is None:
+                data = [(key(ob),ob) for ob in self.data]
+                data.sort()
+            size = len(self.data)
+            changes = [(0, size, size)]
         else:
-            items, old_key, old_change = self.state # XXX needs .data too!
-
-        key = self.sort_key
-        if key != old_key or items is None: # or self.data is not old_data!
-            data = [(key(ob),ob) for ob in self.data]
-            data.sort()
-            size = len(data)
-            return data, key, [(0,size,size)]
-
-        return items, key, self.compute_changes(key, items)
+            changes = self.compute_changes(key, data, reverse)
+        return _sort_state(data, key, reverse, changes)
 
     def __repr__(self):
-        return repr([i[1] for i in self.items])
+        return repr(list(self))
 
-    def compute_changes(self, key, items):
+    def compute_changes(self, key, items, reverse):
         changes = [
             (key(ob), "+", ob) for ob in self.data.added] + [
             (key(ob), "-", ob) for ob in self.data.removed
@@ -130,8 +130,9 @@ class SortedSet(trellis.Component):
         changes.reverse()
 
         lo = 0
-        hi = len(items)
+        hi = old_size = len(items)
         regions = []
+        
 
         for k, op, ob in changes:
             ind = (k, ob)
@@ -153,7 +154,9 @@ class SortedSet(trellis.Component):
                 else:
                     regions.append((pos, pos, 1))
             hi=pos
-                
+
+        if reverse:
+            return [(old_size-e, old_size-s, sz) for (s,e,sz) in regions[::-1]]
         return regions
 
 

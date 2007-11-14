@@ -105,7 +105,7 @@ deleted::
     [4, 3, 2, 1, 0]
 
     >>> add_some()
-    
+
 As you can see, 1 item was inserted at position 3 in the old list, followed
 by 1 item being inserted at position 0.  In other words, if you loop over the
 ``changes`` attribute and apply the slice operations in that order, you can
@@ -157,8 +157,48 @@ index::
     []
     >>> myIndex
     [0, 1, 4]
-    
-TODO: ``reversed`` flag, test changes to ``.data``
+
+As does setting or clearing the ``reverse`` flag (which reverses the effect of
+the sort key)::
+
+    >>> myIndex.reverse = True
+    [(0, 3, 3)]
+    []
+    >>> myIndex
+    [4, 1, 0]
+
+    >>> myItems.add(7)
+    [(0, 0, 1)]
+    []
+    >>> myIndex
+    [7, 4, 1, 0]
+
+    >>> myItems.add(2)
+    [(2, 2, 1)]
+    []
+    >>> myIndex
+    [7, 4, 2, 1, 0]
+
+    >>> myItems.remove(7)
+    [(0, 1, 0)]
+    []
+
+    >>> myItems.remove(2)
+    [(1, 2, 0)]
+    []
+
+    >>> myIndex
+    [4, 1, 0]
+
+    >>> myIndex.reverse = False
+    [(0, 3, 3)]
+    []
+
+    >>> myIndex
+    [0, 1, 4]
+
+
+TODO: test changes to ``.data``
 
 
 SubSet
@@ -176,7 +216,7 @@ items are removed from the ``SubSet``::
     >>> s1.remove(2)
     >>> ss
     SubSet([])
-    
+
 Adding an item to the ``SubSet`` when the item is not in the ``base`` set has
 no effect::
 
