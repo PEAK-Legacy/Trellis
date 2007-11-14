@@ -1,14 +1,14 @@
 from thread import get_ident
 from weakref import ref
 from peak.util import symbols, addons, decorators
-import sys, UserDict, UserList, sets, bisect
+import sys, UserDict, UserList, sets
 
 __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
     'discrete', 'repeat', 'poll', 'InputConflict', 'action', 'ActionCell',
     'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Return', 'TaskCell',
-    'dirty', 'SortedSet',
+    'dirty',
 ]
 
 _states = {}
@@ -941,88 +941,6 @@ class List(UserList.UserList, Component):
 
 
 
-class SortedSet(Component):
-    """Represent a set as a list sorted by a key"""
-    values(
-        data = None,
-        state = None,
-        sort_key  = lambda x:x,  # sort on the object
-        changes = []
-    )
-    rules(
-        data = lambda self: Set(),
-        items = lambda self: self.state[0],
-    )
-
-    changes = discrete(lambda self: self.state[2])
-
-    def __getitem__(self, key):
-        return self.items[int(key)][1]
-
-    def __len__(self):
-        return len(self.items)
-
-    decorators.decorate(rule)
-    def state(self):
-        if self.state is None:
-            items, old_key, old_change = None, None, []
-        else:
-            items, old_key, old_change = self.state
-
-        key = self.sort_key
-        if key != old_key or items is None:
-            data = [(key(ob),ob) for ob in self.data]
-            data.sort()
-            size = len(data)
-            return data, key, [(0,size,size)]
-
-        return items, key, self.compute_changes(key, items)
-
-    def __repr__(self):
-        return repr([i[1] for i in self.items])
-
-
-    def compute_changes(self, key, items):
-        changes = [
-            (key(ob), "+", ob) for ob in self.data.added] + [
-            (key(ob), "-", ob) for ob in self.data.removed
-        ]
-        changes.sort()
-        changes.reverse()
-
-        lo = 0
-        hi = len(items)
-        regions = []
-
-        for k, op, ob in changes:
-            ind = (k, ob)
-            if lo<hi and items[hi-1][0]>=ind:
-                pos = hi-1    # shortcut
-            else:
-                pos = bisect.bisect_left(items, ind, lo, hi)
-
-            if op=='-':
-                del items[pos]
-                if regions and regions[-1][0]==pos+1:
-                    regions[-1] = (pos, regions[-1][1], regions[-1][2])
-                else:
-                    regions.append((pos, pos+1, 0))
-            else:
-                items.insert(pos, ind)
-                if regions and regions[-1][0]==pos:
-                    regions[-1] = (pos, regions[-1][1], regions[-1][2]+1)
-                else:
-                    regions.append((pos, pos, 1))
-            hi=pos
-                
-        return regions
-
-
-
-
-
-
-
 class Set(sets.Set, Component):
     """Mutable set that recalculates observers when it's changed
 
@@ -1034,11 +952,11 @@ class Set(sets.Set, Component):
     you read from the set is "in the present" -- so you can't see the effect of
     any changes until the next Trellis recalculation.
     """
-    added = todo(lambda self: set())
-    removed = todo(lambda self: set())
-
-    to_add = added.future
-    to_remove = removed.future
+    _added = todo(lambda self: set())
+    _removed = todo(lambda self: set())
+    added, removed = _added, _removed
+    to_add = _added.future
+    to_remove = _removed.future
     
     def __init__(self, iterable=None, **kw):
         """Construct a set from an optional iterable."""
@@ -1056,7 +974,7 @@ class Set(sets.Set, Component):
         if self.removed:
             dirty()
             for item in self.removed:
-                del data[item]
+                if item in data: del data[item]
         if self.added:
             dirty(); data.update(dict.fromkeys(self.added, True))
         return data
@@ -1163,7 +1081,7 @@ class Set(sets.Set, Component):
                 to_add.add(elt)         # Don't got it; add it
 
 try:
-    set
+    set = set
 except NameError:
     set = sets.Set
     frozenset = sets.ImmutableSet
