@@ -46,13 +46,13 @@ if wx:
             EventLoop <<= WXEventLoop
             self.app = wx.PySimpleApp(redirect=False)
             self.app.ExitOnFrameDelete = False
-        
+
         def testSequentialCalls(self):
             log = []
             EventLoop.call(log.append, 1)
             EventLoop.call(log.append, 2)
             EventLoop.call(log.append, 3)
-            EventLoop.call(log.append, 4)           
+            EventLoop.call(log.append, 4)
             EventLoop.call(EventLoop.stop)
             EventLoop.run()
             self.assertEqual(log, [1,2,3,4])
@@ -71,7 +71,7 @@ if wx:
 
 
 
-            
+
 
 
 
@@ -90,14 +90,14 @@ if testreactor:
             Time <<= lambda: Time()
             Time.time = reactor.getTime
             EventLoop <<= TwistedEventLoop
-            
+
         def testSequentialCalls(self):
             log = []
             EventLoop.call(log.append, 1)
             EventLoop.call(log.append, 2)
             EventLoop.call(log.append, 3)
-            EventLoop.call(log.append, 4)           
-            
+            EventLoop.call(log.append, 4)
+
             class IdleTimer(trellis.Component):
                 trellis.values(
                     idle_for = NOT_YET,
@@ -124,10 +124,11 @@ if testreactor:
 def additional_tests():
     import doctest, sys
     files = [
-        'README.txt', 'Collections.txt', 'Internals.txt', 'Specification.txt'
-    ][sys.version<'2.4':]   # README.txt uses decorator syntax
+        'README.txt', 'STM-Observer.txt', 'Collections.txt', 'Internals.txt',
+        'Specification.txt',
+    ][(sys.version<'2.4')*3:]   # README.txt uses decorator syntax
     return doctest.DocFileSuite(
-        optionflags=doctest.ELLIPSIS|doctest.NORMALIZE_WHITESPACE, *files        
+        optionflags=doctest.ELLIPSIS|doctest.NORMALIZE_WHITESPACE, *files
     )
 
 
