@@ -1,47 +1,44 @@
 from peak import context
 from peak.events import trellis
 from peak.util import addons
+from peak.util.extremes import Min, Max
 import heapq, weakref, time
 
 __all__ = [
     'Time', 'EPOCH', 'NOT_YET', 'EventLoop', 'WXEventLoop', 'TwistedEventLoop',
 ]
 
-class _ExtremeType(object):     # Courtesy of PEP 326
-    def __init__(self, cmpr, rep):
-        object.__init__(self)
-        self._cmpr = cmpr
-        self._rep = rep
-
-    def __cmp__(self, other):
-        if isinstance(other, self.__class__) and\
-           other._cmpr == self._cmpr:
-            return 0
-        return self._cmpr
-
-    def __repr__(self):
-        return self._rep
-
-    def __lt__(self,other):
-        return self.__cmp__(other)<0
-
-    def __le__(self,other):
-        return self.__cmp__(other)<=0
-
-    def __gt__(self,other):
-        return self.__cmp__(other)>0
-
-    def __eq__(self,other):
-        return self.__cmp__(other)==0
-
-    def __ge__(self,other):
-        return self.__cmp__(other)>=0
-
-
-
-    def __ne__(self,other):
-        return self.__cmp__(other)<>0
+try:
+    set
+except NameError:
+    from sets import Set as set
         
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class _Timer(object):
     """Value representing a moment in time"""
 
@@ -90,16 +87,19 @@ class _Timer(object):
         return NOT_YET
 
 EPOCH = _Timer(0)
-
-Max = _ExtremeType(1, "Max")
-Min = _ExtremeType(-1, "Min")
-
 NOT_YET = _Timer(Max)
     
-try:
-    set
-except NameError:
-    from sets import Set as set
+
+
+
+
+
+
+
+
+
+
+
 
 
 
