@@ -33,7 +33,7 @@ performing an atomic operation::
     >>> def is_active():
     ...     print "Active?", hist.active
 
-    
+
     >>> is_active()
     Active? False
 
@@ -73,7 +73,7 @@ automatically released when the operation is completed::
     ...         print "Manager", self.num, "entering"
     ...     def __exit__(self, typ, val, tb):
     ...         print "Manager", self.num, "exiting", typ, val, tb
-    
+
     >>> hist.manage(DemoManager(1))
     Traceback (most recent call last):
       ...
@@ -177,7 +177,7 @@ operation::
     >>> hist.atomically(hist.manage, CleanupManager())
     on entry: False
     on exit: True
-    
+
 
 Undo, Rollback and Save Points
 ------------------------------
@@ -247,5 +247,66 @@ later::
     >>> hist.atomically(with_savepoint)
     undoing op 3
     undoing op 2
+
+
+
+The Observer Framework
+======================
+
+Above and beyond the bare STM system, the Trellis also needs a strong
+"observer" system that manages subjects, listeners, and the links between
+them::
+
+    >>> from peak.events import stm
+
+
+Subjects, Listeners, and Links
+------------------------------
+
+The ``AbstractSubject`` and ``AbstractListener`` base classes are used to
+implement the observer pattern.  They must be subclassed to be used.  If you
+will be using a lot of instances, you can conserve memory by using ``__slots__``
+in your subclass to store the needed attributes, as shown::
+
+    >>> class Listener(stm.AbstractListener):
+    ...     __slots__ = '__weakref__', 'layer', 'next_subject'
+
+    >>> class Subject(stm.AbstractSubject):
+    ...     __slots__ = 'layer', 'next_listener'
+
+Listeners and Subjects can be many-to-many related.  That is, each listener may
+listen to zero or more subjects, and each subject can have zero or more
+listeners.  These relationships are created using ``Link`` objects::
+
+    >>> l1 = Listener()
+    >>> l2 = Listener()
+    >>> s1 = Subject()
+    >>> s2 = Subject()
+
+    >>> link11 = stm.Link(s1, l1)
+    >>> link21 = stm.Link(s2, l1)
+    >>> link12 = stm.Link(s1, l2)
+    >>> link22 = stm.Link(s2, l2)
+
+    >>> list(l1.iter_subjects())==list(l2.iter_subjects())==[s2, s1]
+    True
+    >>> list(s1.iter_listeners())==list(s2.iter_listeners())==[l2, l1]
+    True
+
+The relationship between a subject and its listeners is "weak"; that is, if
+a listener goes out of existence, all of the relevant links are unlinked from
+the relevant subjects' listener chains::
+
+    >>> del l1
+    >>> list(s1.iter_listeners())==list(s2.iter_listeners())==[l2]
+    True
+
+You can also explicitly break a link by calling its ``.unlink()`` method::
+
+    >>> link12.unlink()
+    >>> list(s1.iter_listeners())
+    []
+    >>> list(s2.iter_listeners())==[l2]
+    True
 
 

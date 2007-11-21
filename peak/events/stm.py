@@ -8,9 +8,53 @@ except ImportError:
     import dummy_threading as threading
 
 __all__ = [
-    'STMHistory', #'Link', 'AbstractListener', 'AbstractSubject',  'History'
+    'STMHistory', 'AbstractSubject',  'Link', 'AbstractListener', #'History'
 ]
 
+class AbstractSubject(object):
+    """Abstract base for objects that can be linked via ``Link`` objects"""
+
+    __slots__ = ()
+
+    def __init__(self):
+        # self.manager = XXX
+        self.next_listener = None
+
+    def iter_listeners(self):
+        """Yield the listeners of this subject"""
+        link = self.next_listener
+        while link is not None:
+            nxt = link.next_listener   # avoid unlinks breaking iteration
+            ob = link()
+            if ob is not None:
+                yield ob
+            link = nxt
+
+
+
+
+
+
+
+
+
+
+class AbstractListener(object):
+    """Abstract base for objects that can be linked via ``Link`` objects"""
+
+    __slots__ = ()
+
+    def __init__(self):
+        self.layer = 0
+        self.next_subject = None
+
+    def iter_subjects(self):
+        """Yield the listeners of this subject"""
+        link = self.next_subject
+        while link is not None:
+            nxt = link.next_subject   # avoid unlinks breaking iteration
+            yield link.subject
+            link = nxt
 
 
 
@@ -36,7 +80,45 @@ __all__ = [
 
 
 
+class Link(weakref.ref):
+    """Dependency link"""
+    __slots__ = [
+        'subject','next_subject','prev_subject','next_listener','prev_listener'
+    ]
 
+    def __new__(cls, subject, listener):
+        self = weakref.ref.__new__(Link, listener, _unlink_fn)
+        self.subject = self.prev_listener = subject
+        self.prev_subject = None    # listener link is via weak ref
+        nxt = self.next_subject = listener.next_subject
+        if nxt is not None:
+            nxt.prev_subject = self
+        nxt = self.next_listener = subject.next_listener
+        if nxt is not None:
+            nxt.prev_listener = self
+        listener.next_subject = self
+        subject.next_listener = self
+        return self
+
+    listener = property(lambda self: self())
+
+    def unlink(self):
+        nxt = self.next_listener
+        prev = self.prev_listener
+        if nxt is not None:
+            nxt.prev_listener = prev
+        if prev is not None:
+            prev.next_listener = nxt
+        prev = self.prev_subject
+        nxt = self.next_subject
+        if nxt is not None:
+            nxt.prev_subject = prev
+        if prev is None:
+            prev = self()   # get head of list
+        if prev is not None and prev.next_subject is self:
+            prev.next_subject = nxt
+
+_unlink_fn = Link.unlink
 
 
 class STMHistory(object):

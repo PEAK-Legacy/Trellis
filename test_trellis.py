@@ -1,7 +1,7 @@
 from test_sets import *
 from peak import context
 from peak.events.activity import EventLoop, TwistedEventLoop, Time, NOT_YET
-from peak.events import trellis
+from peak.events import trellis, stm
 import unittest
 
 try:
@@ -117,6 +117,97 @@ if testreactor:
             it = IdleTimer()
             EventLoop.run()
             self.assertEqual(log, [1,2,3,4,5])
+
+
+
+
+class TestListener(stm.AbstractListener): pass
+class TestSubject(stm.AbstractSubject): pass
+
+class TestLinks(unittest.TestCase):
+
+    def setUp(self):
+        self.l1 = TestListener()
+        self.l2 = TestListener()
+        self.s1 = TestSubject()
+        self.s2 = TestSubject()
+        self.lk11 = stm.Link(self.s1, self.l1)
+        self.lk12 = stm.Link(self.s1, self.l2)
+        self.lk21 = stm.Link(self.s2, self.l1)
+        self.lk22 = stm.Link(self.s2, self.l2)
+
+    def verify_subjects(self, items):
+        for link, nxt, prev in items:
+            self.failUnless(link.next_subject is nxt)
+            if isinstance(link,stm.Link):
+                self.failUnless(link.prev_subject is prev)
+            
+    def verify_listeners(self, items):
+        for link, nxt, prev in items:
+            self.failUnless(link.next_listener is nxt)
+            if isinstance(link,stm.Link):
+                self.failUnless(link.prev_listener is prev)
+            
+    def testBreakIterSubjects(self):
+        it = self.l1.iter_subjects()
+        self.failUnless(it.next() is self.s2)
+        self.lk11.unlink()
+        self.failUnless(it.next() is self.s1)
+
+    def testBreakIterListeners(self):
+        it = self.s1.iter_listeners()
+        self.failUnless(it.next() is self.l2)
+        self.lk11.unlink()
+        self.failUnless(it.next() is self.l1)
+
+
+
+
+
+
+
+
+
+
+
+
+    def testLinkSetup(self):
+        self.verify_subjects([
+            (self.l1, self.lk21, None),   (self.l2, self.lk22, None),
+            (self.lk21, self.lk11, None), (self.lk11, None, self.lk21),
+            (self.lk22, self.lk12, None), (self.lk12, None, self.lk22),
+        ])
+        self.verify_listeners([
+            (self.s1, self.lk12, None),      (self.s2, self.lk22, None),
+            (self.lk22, self.lk21, self.s2), (self.lk21, None, self.lk22),
+            (self.lk12, self.lk11, self.s1), (self.lk11, None, self.lk12),
+        ])           
+
+    def testUnlinkListenerHeadSubjectTail(self):
+        self.lk21.unlink()
+        self.verify_subjects([
+            (self.l1, self.lk11, None), (self.lk11, None, None)
+        ])
+        self.verify_listeners([
+            (self.s2, self.lk22, None), (self.lk22, None, self.s2)
+        ])
+
+    def testUnlinkListenerTailSubjectHead(self):
+        self.lk12.unlink()
+        self.verify_subjects([
+            (self.l2, self.lk22, None), (self.lk22, None, None),
+        ])
+        self.verify_listeners([
+            (self.s1, self.lk11, None), (self.lk11, None, self.s1),
+        ])           
+
+
+        
+
+
+
+
+
 
 
 
