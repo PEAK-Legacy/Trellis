@@ -249,6 +249,41 @@ later::
     undoing op 2
 
 
+Logged Setattr
+--------------
+
+As a convenience, you can use the ``setattr()`` method of history objects to
+automatically log an undo function to restore the old value of the attribute
+being set::
+
+    >>> class SomeObject:
+    ...     pass
+
+    >>> s1 = SomeObject()
+    >>> s1.foo = 'bar'
+
+    >>> def setattr_normally():
+    ...     hist.setattr(s1, 'foo', "baz")
+
+    >>> hist.atomically(setattr_normally)
+    >>> s1.foo
+    'baz'
+
+    >>> def setattr_rollback():
+    ...     hist.setattr(s1, 'foo', "spam")
+    ...     raise TypeError
+
+    >>> hist.atomically(setattr_rollback)
+    Traceback (most recent call last):
+      ...
+    TypeError
+    
+    >>> s1.foo      # result is unchanged after rollback
+    'baz'
+
+As you can see, this saves you the work of recording the undo operation
+manually.
+
 
 The Observer Framework
 ======================
@@ -308,5 +343,8 @@ You can also explicitly break a link by calling its ``.unlink()`` method::
     []
     >>> list(s2.iter_listeners())==[l2]
     True
+
+Normally, however, you will not create or manage links explicitly, as they
+are automatically managed by the controller.
 
 

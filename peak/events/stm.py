@@ -8,7 +8,7 @@ except ImportError:
     import dummy_threading as threading
 
 __all__ = [
-    'STMHistory', 'AbstractSubject',  'Link', 'AbstractListener', #'History'
+    'STMHistory', 'AbstractSubject',  'Link', 'AbstractListener', 'Controller',
 ]
 
 class AbstractSubject(object):
@@ -16,8 +16,9 @@ class AbstractSubject(object):
 
     __slots__ = ()
 
+    manager = None
+
     def __init__(self):
-        # self.manager = XXX
         self.next_listener = None
 
     def iter_listeners(self):
@@ -29,7 +30,6 @@ class AbstractSubject(object):
             if ob is not None:
                 yield ob
             link = nxt
-
 
 
 
@@ -100,8 +100,6 @@ class Link(weakref.ref):
         subject.next_listener = self
         return self
 
-    listener = property(lambda self: self())
-
     def unlink(self):
         nxt = self.next_listener
         prev = self.prev_listener
@@ -121,6 +119,8 @@ class Link(weakref.ref):
 _unlink_fn = Link.unlink
 
 
+
+
 class STMHistory(object):
     """Simple STM implementation using undo logging and context managers"""
 
@@ -138,8 +138,7 @@ class STMHistory(object):
         try:
             try:
                 retval = func(*args, **kw)
-                if self.managers:
-                    self.cleanup()
+                self.cleanup()
                 return retval
             except:
                 self.cleanup(*sys.exc_info())
@@ -161,6 +160,7 @@ class STMHistory(object):
     def savepoint(self):
         """Get a savepoint suitable for calling ``rollback_to()``"""
         return len(self.undo)
+
 
     def rollback_to(self, sp=0):
         """Rollback to the specified savepoint"""
@@ -193,6 +193,170 @@ class STMHistory(object):
         finally:
             self.in_cleanup = False
             typ = val = tb = None
+
+    def setattr(self, ob, attr, val):
+        """Set `ob.attr` to `val`, w/undo log to restore the previous value"""
+        self.on_undo(setattr, ob, attr, getattr(ob, attr))
+        setattr(ob, attr, val)
+
+
+
+
+
+class Controller(STMHistory):
+    """STM History with support for subjects, listeners, and queueing"""
+
+    last_listener = current_listener = last_notified = last_save = None
+    readonly = False
+
+    def __init__(self):
+        super(Controller, self).__init__()
+        self.reads = {}
+        self.writes = {}
+        self.has_run = {}   # listeners that have run
+        self.layers = []    # heap of layer numbers
+        self.queues = {}    # [layer]    -> dict of listeners to be run
+
+    def cleanup(self, *args):
+        try:
+            return super(Controller, self).cleanup(*args)
+        finally:
+            #self.has_run.clear()
+            del self.layers[:]
+            self.queues.clear()
+            self.current_listener = None
+            self.last_notified = None
+            #self.last_listener = None
+            #self.last_save = None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def schedule(self, listener, source_layer=None, reschedule=False):
+        """Schedule `listener` to run during an atomic operation
+
+        If an operation is already in progress, it's immediately scheduled, and
+        its scheduling is logged in the undo queue (unless it was already
+        scheduled)
+
+        If `source_layer` is specified, ensure that the listener belongs to
+        a higher layer than the source, moving the listener from an existing
+        queue layer if necessary.  (This layer elevation is intentionally
+        NOT undo-logged, however.)
+        """
+        new = old = listener.layer
+        get = self.queues.get
+
+        if source_layer is not None and source_layer >= listener.layer:
+            new = source_layer + 1
+
+        q = get(old)
+        if q and listener in q:
+            if new is not old:
+                self.cancel(listener)
+
+        elif self.active and not reschedule:
+            self.on_undo(self.cancel, listener)
+
+        if new is not old:
+            listener.layer = new
+            q = get(new)
+
+        if q is None:
+             q = self.queues[new] = {listener:1}
+             heapq.heappush(self.layers, new)
+        else:
+            q[listener] = 1
+
+
+
+
+
+
+    def _process_writes(self, listener):
+        #
+        # Remove changed items from self.writes and notify their listeners,
+        # keeping a record in self.last_notified so that we can figure out
+        # later what caused a cyclic dependency (if one happens).
+        #
+        notified = {}
+        self.setattr(self, 'last_notified', notified)
+        writes = self.writes
+        layer = listener.layer
+        while writes:
+            subject, ignore = writes.popitem()
+            for dependent in subject.iter_listeners():
+                if dependent is not listener:
+                    # XXX if dependent.dirty(listener):
+                        self.schedule(dependent, layer)
+                        notified[dependent] = 1
+
+    def _process_reads(self, listener):
+        #
+        # Remove subjects from self.reads and link them to `listener`
+        # (Old subjects of the listener are deleted, and self.reads is cleared
+        #
+        subjects = self.reads
+
+        link = listener.next_subject
+        while link is not None:
+            nxt = link.next_subject   # avoid unlinks breaking iteration
+            if link.subject in subjects:
+                del subjects[link.subject]
+            else:
+                self.undo.append((Link, (link.subject, listener)))
+                link.unlink()
+            link = nxt
+
+        while subjects:
+            self.undo.append(
+                (Link(subjects.popitem()[0], listener).unlink, ())
+            )
+
+
+    def cancel(self, listener):
+        """Prevent the listener from being recalculated, if applicable"""
+        q = self.queues.get(listener.layer)
+        if q and listener in q:
+            del q[listener]
+            if not q:
+                del self.queues[listener.layer]
+                self.layers.remove(listener.layer)
+                self.layers.sort()  # preserve heap order
+
+    def lock(self, subject):
+        assert self.active, "Subjects must be accessed atomically"
+        manager = subject.manager
+        if manager is not None and manager not in self.managers:
+            self.manage(manager)
+
+    def used(self, subject):
+        self.lock(subject)
+        if self.current_listener is not None:
+            self.reads[subject] = 1
+
+    def changed(self, subject):
+        self.lock(subject)
+        if self.current_listener is not None:
+            self.writes[subject] = 1
+        if self.readonly:
+            raise RuntimeError("Can't change objects during commit phase")
+
+
+
+
 
 
 
