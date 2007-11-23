@@ -10,7 +10,7 @@ except ImportError:
 
 __all__ = [
     'STMHistory', 'AbstractSubject',  'Link', 'AbstractListener', 'Controller',
-    'CircularityError'
+    'CircularityError', 'LocalController',
 ]
 
 class CircularityError(Exception):
@@ -43,9 +43,9 @@ class AbstractListener(object):
     """Abstract base for objects that can be linked via ``Link`` objects"""
 
     __slots__ = ()
+    layer = 0
 
     def __init__(self):
-        self.layer = 0
         self.next_subject = None
 
     def iter_subjects(self):
@@ -53,18 +53,18 @@ class AbstractListener(object):
         link = self.next_subject
         while link is not None:
             nxt = link.next_subject   # avoid unlinks breaking iteration
-            yield link.subject
+            if link.subject is not None:
+                yield link.subject
             link = nxt
 
+    def dirty(self):
+        """Mark the listener dirty and query whether it should be scheduled
 
-
-
-
-
-
-
-
-
+        If a true value is returned, the listener should be scheduled.  Note
+        that this method is allowed to have side-effects, but must be
+        idempotent.
+        """
+        return True
 
 
 
@@ -101,6 +101,7 @@ class Link(weakref.ref):
         return self
 
     def unlink(self):
+        """Deactivate the link and remove it from its lists"""
         nxt = self.next_listener
         prev = self.prev_listener
         if nxt is not None:
@@ -115,11 +116,10 @@ class Link(weakref.ref):
             prev = self()   # get head of list
         if prev is not None and prev.next_subject is self:
             prev.next_subject = nxt
+        self.subject = self.next_subject = self.prev_subject = None
+        self.next_listener = self.prev_listener = None
 
 _unlink_fn = Link.unlink
-
-
-
 
 class STMHistory(object):
     """Simple STM implementation using undo logging and context managers"""
@@ -128,6 +128,7 @@ class STMHistory(object):
 
     def __init__(self):
         self.undo = []      # [(func,args), ...]
+        self.at_commit =[]       # [(func,args), ...]
         self.managers = {}  # [mgr]->seq #  (context managers to __exit__ with)
 
     def atomically(self, func=lambda:None, *args, **kw):
@@ -143,7 +144,6 @@ class STMHistory(object):
             except:
                 self.cleanup(*sys.exc_info())
         finally:
-            del self.undo[:]
             self.active = False
 
     def manage(self, mgr):
@@ -172,15 +172,24 @@ class STMHistory(object):
 
     def cleanup(self, typ=None, val=None, tb=None):
         # Exit the processing loop, unwinding managers
-
         assert self.active, "Can't exit when inactive"
         assert not self.in_cleanup, "Can't invoke cleanup while in cleanup"
-
         self.in_cleanup = True
+
+        if typ is None:
+            try:
+                for (f,a) in self.at_commit: f(*a)
+            except:
+                typ, val, tb = sys.exc_info()
+        if typ is not None:
+            try:
+                self.rollback_to(0)
+            except:
+                typ, val, tb = sys.exc_info()
+
         managers = [(posn,mgr) for (mgr, posn) in self.managers.items()]
         managers.sort()
         self.managers.clear()
-
         try:
             while managers:
                 try:
@@ -188,9 +197,9 @@ class STMHistory(object):
                 except:
                     typ, val, tb = sys.exc_info()
             if typ is not None:
-                self.rollback_to(0)
                 raise typ, val, tb
         finally:
+            del self.at_commit[:], self.undo[:]
             self.in_cleanup = False
             typ = val = tb = None
 
@@ -198,6 +207,38 @@ class STMHistory(object):
         """Set `ob.attr` to `val`, w/undo log to restore the previous value"""
         self.on_undo(setattr, ob, attr, getattr(ob, attr))
         setattr(ob, attr, val)
+
+    def on_commit(self, func, *args):
+        """Call `func(*args)` if atomic operation is committed"""
+        assert self.active, "Not in an atomic operation"
+        self.at_commit.append((func, args))
+        self.undo.append((self.at_commit.pop,()))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -299,7 +340,7 @@ class Controller(STMHistory):
             subject, ignore = writes.popitem()
             for dependent in subject.iter_listeners():
                 if dependent is not listener:
-                    # XXX if dependent.dirty(listener):
+                    if dependent.dirty():
                         self.schedule(dependent, layer)
                         notified[dependent] = 1
 
@@ -423,18 +464,18 @@ class Controller(STMHistory):
         self.lock(subject)
         if self.current_listener is not None:
             self.writes[subject] = 1
+        else:
+            for listener in subject.iter_listeners():
+                if listener.dirty():
+                    self.schedule(listener)
         if self.readonly:
             raise RuntimeError("Can't change objects during commit phase")
 
 
+class LocalController(Controller, threading.local):
+    """Thread-local Controller"""
 
-
-
-
-
-
-
-
+ctrl = LocalController()
 
 
 

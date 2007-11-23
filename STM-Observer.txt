@@ -212,7 +212,8 @@ an error occurs, the undo functions are called in reverse order::
     undoing op 1
     caught exception
 
-This even happens if the error occurs in a manager's ``__exit__()`` method::
+But this does NOT happen if the error occurs in a manager's ``__exit__()``
+method::
 
     >>> def with_undo():
     ...     hist.manage(ErrorManager("error"))
@@ -225,13 +226,14 @@ This even happens if the error occurs in a manager's ``__exit__()`` method::
     ...     print "caught exception"
     Manager error entering
     Manager error exiting None None None
-    undoing op 2
-    undoing op 1
     caught exception
+
+(That's because managers may be used to control locking or other context setups
+that need to still be in place for the undo's to be safe.)
 
 Note, by the way, that undo functions must NEVER raise errors, under any
 circumstances.  If they do, any undo functions that have *not* been called
-yet, will never be called.
+yet, will never *be* called.
 
 In addition to the automatic rollback on error, you can also record savepoints
 within an atomic operation, and then rollback to that savepoint at any time
@@ -249,6 +251,77 @@ later::
     undoing op 2
 
 
+Commit Callbacks
+----------------
+
+If you want to defer an action until the overal operation is ready to commit,
+you can use the ``on_commit(func, *args)`` method::
+
+    >>> def do_something(msg):
+    ...     print "committing", msg
+
+    >>> def do_with_commit():
+    ...     hist.on_commit(do_something, "hello!")
+    ...     print "registered commit operation"
+
+    >>> hist.atomically(do_with_commit)
+    registered commit operation
+    committing hello!
+
+Commit actions are called in the order they are registered (before any
+managers) and their registrations are subject to undo::
+
+    >>> def do_with_commit_and_undo():
+    ...     hist.manage(DemoManager('test'))
+    ...     hist.on_commit(do_something, 1)
+    ...     sp = hist.savepoint()
+    ...     hist.on_commit(do_something, 2)
+    ...     hist.rollback_to(sp)
+    ...     hist.on_commit(do_something, 3)
+
+    >>> hist.atomically(do_with_commit_and_undo)
+    Manager test entering
+    committing 1
+    committing 3
+    Manager test exiting None None None
+
+Commit actions are also allowed to record undo actions, in case there is
+an error later in the commit process::
+
+    >>> def do_with_commit_and_undo():
+    ...     def f1():
+    ...         print "f1 running"
+    ...         hist.on_undo(f3)
+    ...     def f2():
+    ...         print "f2 running"
+    ...         raise AssertionError
+    ...     def f3():
+    ...         print "f3 running"
+    ...     hist.on_commit(f1)
+    ...     hist.on_commit(f2)
+
+    >>> try:
+    ...     hist.atomically(do_with_commit_and_undo)
+    ... except AssertionError:
+    ...     print "caught exception"
+    f1 running
+    f2 running
+    f3 running
+    caught exception
+
+And of course, commit actions are not run if an error occurs before they have
+a chance to run:
+
+    >>> def do_no_commit():
+    ...     hist.on_commit(do_something, "should not happen")
+    ...     raise AssertionError
+    >>> try:
+    ...     hist.atomically(do_no_commit)
+    ... except AssertionError:
+    ...     print "caught exception"
+    caught exception
+
+    
 Logged Setattr
 --------------
 

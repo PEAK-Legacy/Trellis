@@ -29,12 +29,12 @@ class EventLoopTestCase(unittest.TestCase):
     def configure_context(self):
         pass
 
-
-
-
-
-
-
+class TestListener(stm.AbstractListener): pass
+class TestSubject(stm.AbstractSubject): pass
+class DummyError(Exception): pass
+class UndirtyListener(TestListener):
+    def dirty(self):
+        return False
 
 
 
@@ -121,10 +121,6 @@ if testreactor:
 
 
 
-class TestListener(stm.AbstractListener): pass
-class TestSubject(stm.AbstractSubject): pass
-class DummyError(Exception): pass
-
 class TestLinks(unittest.TestCase):
 
     def setUp(self):
@@ -152,7 +148,7 @@ class TestLinks(unittest.TestCase):
     def testBreakIterSubjects(self):
         it = self.l1.iter_subjects()
         self.failUnless(it.next() is self.s2)
-        self.lk11.unlink()
+        self.lk21.unlink()
         self.failUnless(it.next() is self.s1)
 
     def testBreakIterListeners(self):
@@ -160,6 +156,10 @@ class TestLinks(unittest.TestCase):
         self.failUnless(it.next() is self.l2)
         self.lk11.unlink()
         self.failUnless(it.next() is self.l1)
+
+
+
+
 
 
     def testLinkSetup(self):
@@ -210,24 +210,19 @@ class TestController(unittest.TestCase):
         self.t0 = TestListener()
         self.t1 = TestListener(); self.t1.layer = 1
         self.t2 = TestListener(); self.t2.layer = 2
+        self.t3 = UndirtyListener()
         self.s1 = TestSubject(); self.s2 = TestSubject()
 
     def tearDown(self):
         # Verify correct cleanup in all scenarios
-        self.assertEqual(self.ctrl.undo, [])
-        self.assertEqual(self.ctrl.managers, {})
-        self.assertEqual(self.ctrl.queues, {})
-        self.assertEqual(self.ctrl.layers, [])
-        self.assertEqual(self.ctrl.reads, {})
-        self.assertEqual(self.ctrl.writes, {})
-        self.assertEqual(self.ctrl.has_run, {})
-        self.assertEqual(self.ctrl.last_listener, None)
-        self.assertEqual(self.ctrl.last_notified, None)
-        self.assertEqual(self.ctrl.last_save, None)
-        self.assertEqual(self.ctrl.current_listener, None)
-        self.assertEqual(self.ctrl.readonly, False)
-        self.assertEqual(self.ctrl.in_cleanup, False)
-        self.assertEqual(self.ctrl.active, False)
+        for k,v in dict(
+            undo=[], managers={}, queues={}, layers=[], reads={}, writes={},
+            has_run={}, last_listener=None, last_notified=None, last_save=None,
+            current_listener=None, readonly=False, in_cleanup=False,
+            active=False, at_commit=[]
+        ).items():
+            val = getattr(self.ctrl, k)
+            self.assertEqual(val, v, '%s: %r' % (k,val))
 
     def testScheduleSimple(self):
         t1 = TestListener()
@@ -243,6 +238,11 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.queues, {0: {t2:1}})
         self.ctrl.cancel(t2)
         # tearDown will assert that everything has been cleared
+
+    def testThreadLocalController(self):
+        self.failUnless(isinstance(stm.ctrl, stm.Controller))
+        self.failUnless(isinstance(stm.ctrl, stm.threading.local))
+
 
     def testHeapingCancel(self):
         # verify that cancelling the last listener of a layer keeps
@@ -412,13 +412,14 @@ class TestController(unittest.TestCase):
     def testWriteProcessingInRun(self):
         stm.Link(self.s1, self.t0)
         stm.Link(self.s2, self.t1)
+        stm.Link(self.s2, self.t3)
         stm.Link(self.s2, self.t0)
         def rule():
             self.ctrl.changed(self.s1)
             self.ctrl.changed(self.s2)
             self.assertEqual(self.ctrl.writes, {self.s1:1, self.s2:1})
         self.runAs(self.t1, rule)
-        # Only t0 is notified, not t1, since t1 is the listener
+        # Only t0 is notified, not t1, since t1 is the listener & t3 is !dirty
         self.assertEqual(self.ctrl.writes, {})
         self.assertEqual(self.ctrl.last_notified, {self.t0: 1})
         self.assertEqual(self.ctrl.queues, {2: {self.t0:1}})
@@ -446,7 +447,6 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.readonly, False)
         self.runAs(self.t0, rule)
         self.assertEqual(self.ctrl.readonly, False)
-
 
 
     d(a)
@@ -557,6 +557,16 @@ class TestController(unittest.TestCase):
         self.ctrl.atomically(self.ctrl.schedule, self.t0)
         self.assertEqual(log, [True])
 
+    d(a)
+    def testNotifyOnChange(self):
+        stm.Link(self.s2, self.t2)
+        stm.Link(self.s2, self.t3)
+        self.ctrl.changed(self.s2)
+        self.ctrl.current_listener = self.t0
+        self.ctrl.changed(self.s2)
+        self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
+        self.ctrl.cancel(self.t2)
+        self.ctrl.writes.clear()
 
 
 
