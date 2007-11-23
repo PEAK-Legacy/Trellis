@@ -3,6 +3,7 @@ from peak import context
 from peak.events.activity import EventLoop, TwistedEventLoop, Time, NOT_YET
 from peak.events import trellis, stm
 from peak.util.decorators import rewrap, decorate as d
+from peak.util.extremes import Max
 import unittest, heapq
 
 try:
@@ -27,7 +28,6 @@ class EventLoopTestCase(unittest.TestCase):
 
     def configure_context(self):
         pass
-
 
 
 
@@ -123,6 +123,7 @@ if testreactor:
 
 class TestListener(stm.AbstractListener): pass
 class TestSubject(stm.AbstractSubject): pass
+class DummyError(Exception): pass
 
 class TestLinks(unittest.TestCase):
 
@@ -141,13 +142,13 @@ class TestLinks(unittest.TestCase):
             self.failUnless(link.next_subject is nxt)
             if isinstance(link,stm.Link):
                 self.failUnless(link.prev_subject is prev)
-            
+
     def verify_listeners(self, items):
         for link, nxt, prev in items:
             self.failUnless(link.next_listener is nxt)
             if isinstance(link,stm.Link):
                 self.failUnless(link.prev_listener is prev)
-            
+
     def testBreakIterSubjects(self):
         it = self.l1.iter_subjects()
         self.failUnless(it.next() is self.s2)
@@ -161,7 +162,6 @@ class TestLinks(unittest.TestCase):
         self.failUnless(it.next() is self.l1)
 
 
-
     def testLinkSetup(self):
         self.verify_subjects([
             (self.l1, self.lk21, None),   (self.l2, self.lk22, None),
@@ -172,7 +172,7 @@ class TestLinks(unittest.TestCase):
             (self.s1, self.lk12, None),      (self.s2, self.lk22, None),
             (self.lk22, self.lk21, self.s2), (self.lk21, None, self.lk22),
             (self.lk12, self.lk11, self.s1), (self.lk11, None, self.lk12),
-        ])           
+        ])
 
     def testUnlinkListenerHeadSubjectTail(self):
         self.lk21.unlink()
@@ -190,7 +190,7 @@ class TestLinks(unittest.TestCase):
         ])
         self.verify_listeners([
             (self.s1, self.lk11, None), (self.lk11, None, self.s1),
-        ])           
+        ])
 
 
 
@@ -287,13 +287,12 @@ class TestController(unittest.TestCase):
 
     def testCleanup(self):
         self.ctrl.schedule(self.t0)
-        class MyError(Exception): pass
         def raiser():
             # XXX need to actually run one rule, plus start another w/error
-            raise MyError
+            raise DummyError
         try:
-            self.ctrl.atomically(raiser)
-        except MyError:
+            self.ctrl.atomically(self.runAs, self.t0, raiser)
+        except DummyError:
             pass
 
     def testSubjectsMustBeAtomic(self):
@@ -326,6 +325,7 @@ class TestController(unittest.TestCase):
         self.ctrl.reads.clear()     # these would normally be handled by
         self.ctrl.writes.clear()    # the run() method's try/finally
 
+
     d(a)
     def testNoReadDuringCommit(self):
         self.ctrl.readonly = True
@@ -346,7 +346,6 @@ class TestController(unittest.TestCase):
         # Only t0 is notified, not t1, since t1 is the listener
         self.assertEqual(self.ctrl.last_notified, {self.t0: 1})
         self.assertEqual(self.ctrl.queues, {2: {self.t0:1}})
-        self.ctrl.reads.clear()     # normally reset by _process_reads
         self.ctrl.rollback_to(sp)
         self.assertEqual(self.ctrl.last_notified, None)
 
@@ -364,7 +363,264 @@ class TestController(unittest.TestCase):
         self.assertEqual(list(self.t0.iter_subjects()), [self.s2, self.s1])
         self.ctrl.rollback_to(sp)
         self.assertEqual(list(self.t0.iter_subjects()), [s3, self.s1])
+
+
+
+
+    def runAs(self, listener, rule):
+        listener.run = rule
+        self.ctrl.run(listener)
+
+    d(a)
+    def testIsRunningAndHasRan(self):
+        def rule():
+            self.assertEqual(self.ctrl.current_listener, self.t1)
+            self.assertEqual(self.ctrl.last_listener, self.t1)
+            self.assertEqual(self.ctrl.has_run, {self.t1: None})
+        sp = self.ctrl.savepoint()
+        self.runAs(self.t1, rule)
+        self.assertEqual(self.ctrl.last_save, sp)
+        self.assertEqual(self.ctrl.current_listener, None)
+        self.assertEqual(self.ctrl.last_listener, self.t1)
+        self.assertEqual(self.ctrl.has_run, {self.t1: None})
+        self.ctrl.rollback_to(sp)   # should clear last_listener, last_save
+
+    d(a)
+    def testClearLastListener(self):
+        self.runAs(self.t1, lambda:1)
+        self.assertEqual(self.ctrl.last_listener, self.t1)
+        # last_listener should be cleared by cleanup()
+
+    d(a)
+    def testScheduleUndoRedo(self):
+        sp = self.ctrl.savepoint()
+        self.ctrl.schedule(self.t2)
+        self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
+        self.ctrl.rollback_to(sp)
+        self.assertEqual(self.ctrl.queues, {})
+        self.ctrl.schedule(self.t2, reschedule=True)
+        self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
+        self.ctrl.rollback_to(sp)
+        self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
+        self.ctrl.cancel(self.t2)
+
+
+
+
+
+    d(a)
+    def testWriteProcessingInRun(self):
+        stm.Link(self.s1, self.t0)
+        stm.Link(self.s2, self.t1)
+        stm.Link(self.s2, self.t0)
+        def rule():
+            self.ctrl.changed(self.s1)
+            self.ctrl.changed(self.s2)
+            self.assertEqual(self.ctrl.writes, {self.s1:1, self.s2:1})
+        self.runAs(self.t1, rule)
+        # Only t0 is notified, not t1, since t1 is the listener
+        self.assertEqual(self.ctrl.writes, {})
+        self.assertEqual(self.ctrl.last_notified, {self.t0: 1})
+        self.assertEqual(self.ctrl.queues, {2: {self.t0:1}})
+        self.ctrl.cancel(self.t0)
+
+    d(a)
+    def testReadProcessingInRun(self):
+        stm.Link(self.s1, self.t0)
+        s3 = TestSubject()
+        stm.Link(s3, self.t0)
+        self.assertEqual(list(self.t0.iter_subjects()), [s3, self.s1])
+        def rule():
+            self.ctrl.used(self.s1)
+            self.ctrl.used(self.s2)
+            self.assertEqual(self.ctrl.reads, {self.s1:1, self.s2:1})
+        self.runAs(self.t0, rule)
+        self.assertEqual(self.ctrl.reads, {})
+        self.assertEqual(list(self.t0.iter_subjects()), [self.s2, self.s1])
+
+    d(a)
+    def testReadOnlyDuringMax(self):
+        def rule():
+            self.assertEqual(self.ctrl.readonly, True)
+        self.t0.layer = Max
+        self.assertEqual(self.ctrl.readonly, False)
+        self.runAs(self.t0, rule)
+        self.assertEqual(self.ctrl.readonly, False)
+
+
+
+    d(a)
+    def testRunClearsReadWriteOnError(self):
+        def rule():
+            self.ctrl.used(self.s1)
+            self.ctrl.changed(self.s2)
+            self.assertEqual(self.ctrl.reads, {self.s1:1})
+            self.assertEqual(self.ctrl.writes, {self.s2:1})
+            try:
+                self.runAs(self.t0, rule)
+            except DummyError:
+                pass
+            else:
+                raise AssertionError("Error should've propagated")
+        self.assertEqual(self.ctrl.reads, {})
+        self.assertEqual(self.ctrl.writes, {})
+
+    d(a)
+    def testSimpleCycle(self):
+        stm.Link(self.s1, self.t1)
+        stm.Link(self.s2, self.t2)
+        def rule0():
+            self.ctrl.used(self.s1)
+            self.ctrl.changed(self.s1)
+        def rule1():
+            self.ctrl.used(self.s1)
+            self.ctrl.changed(self.s2)
+        def rule2():
+            self.ctrl.used(self.s2)
+            self.ctrl.changed(self.s1)
+        self.runAs(self.t0, rule0)
+        self.runAs(self.t1, rule1)
+        self.runAs(self.t2, rule2)
+        try:
+            self.runAs(self.t0, rule0)
+        except stm.CircularityError, e:
+            self.assertEqual(e.args[0],
+                {self.t0: set([self.t1]), self.t1: set([self.t2]),
+                 self.t2: set([self.t0])})
+        else:
+            raise AssertionError("Should've caught a cycle")
+
+    d(a)
+    def testSimpleRetry(self):
+        def rule():
+            pass
+        sp = self.ctrl.savepoint()
+        self.runAs(self.t0, rule)
+        self.runAs(self.t1, rule)
+        self.runAs(self.t2, rule)
+        self.ctrl._retry(self.t1)
+        self.assertEqual(self.ctrl.last_listener, self.t0)
+        self.assertEqual(self.ctrl.last_save, sp)
+        self.ctrl._retry(self.t0)
+        self.assertEqual(self.ctrl.last_save, None)
+
+    d(a)
+    def testNestedRetry(self):
+        def rule0():
+            self.runAs(self.t1, rule1)
+        def rule1():
+            pass
+        def rule2():
+            raise AssertionError("I should not be run")
+        self.runAs(self.t2, rule1)
+        self.runAs(self.t0, rule0)
+        self.runAs(self.t1, rule2)
+        self.assertEqual(self.ctrl.last_listener, self.t2)
+        self.assertEqual(self.ctrl.queues, {0: {self.t0:1}})
+        self.ctrl.cancel(self.t0)
+
+    def testRunScheduled(self):
+        log = []
+        self.t1.run = lambda: log.append(True)
+        def go():
+            self.ctrl.schedule(self.t1)
+        self.ctrl.atomically(go)
+        self.assertEqual(log, [True])
+
+
+
+
+
+    def testRollbackReschedules(self):
+        sp = []
+        def rule0():
+            self.ctrl.rollback_to(sp[0])
+            self.assertEqual(self.ctrl.queues, {0: {self.t0:1}})
+            self.ctrl.cancel(self.t0)
+        self.t0.run = rule0
+        def go():
+            self.ctrl.schedule(self.t0)
+            sp.append(self.ctrl.savepoint())
+        self.ctrl.atomically(go)
         
+    def testManagerCanCreateLoop(self):
+        class Mgr:
+            def __enter__(self): pass
+            def __exit__(*args):
+                self.ctrl.schedule(self.t1)
+        log = []
+        def rule1():
+            log.append(True)
+        self.t1.run = rule1
+        self.t0.run = lambda:self.ctrl.manage(Mgr())
+        #import pdb; pdb.set_trace()
+        self.ctrl.atomically(self.ctrl.schedule, self.t0)
+        self.assertEqual(log, [True])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    d(a)
+    def testNestedRule(self):
+        def rule1():
+            self.assertEqual(self.ctrl.last_listener, self.t1)
+            self.assertEqual(self.ctrl.current_listener, self.t1)
+            self.ctrl.used(self.s1)
+            self.ctrl.changed(self.s2)
+            self.assertEqual(self.ctrl.reads, {self.s1:1})
+            self.assertEqual(self.ctrl.writes, {self.s2:1})
+            self.runAs(self.t2, rule2)
+            self.assertEqual(self.ctrl.last_listener, self.t2)
+            self.assertEqual(self.ctrl.current_listener, self.t1)
+            self.assertEqual(self.ctrl.reads, {self.s1:1})
+            self.assertEqual(self.ctrl.writes, {self.s2:1, s3:1})
+
+        def rule2():
+            self.assertEqual(self.ctrl.last_listener, self.t2)
+            self.assertEqual(self.ctrl.current_listener, self.t2)
+            self.assertEqual(self.ctrl.reads, {})
+            self.assertEqual(self.ctrl.writes, {self.s2:1})
+            self.ctrl.used(self.s2)
+            self.ctrl.changed(s3)
+
+        def rule0():
+            pass
+
+        s3 = TestSubject()
+        self.runAs(self.t0, rule0)
+        self.runAs(self.t1, rule1)
+        self.assertEqual(self.ctrl.has_run,
+            {self.t1:None, self.t2:self.t1, self.t0: None}
+        )
+        self.assertEqual(list(self.t1.iter_subjects()), [self.s1])
+        self.assertEqual(list(self.t2.iter_subjects()), [self.s2])
+        self.ctrl.rollback_to(self.ctrl.last_save)  # should undo both t1/t2
+        self.assertEqual(self.ctrl.last_listener, self.t0)
+
+
+
 
 
 def additional_tests():
