@@ -37,5 +37,5 @@ setup(
     install_requires = [
         'SymbolType>=1.0', 'AddOns>=0.6', 'DecoratorTools>=1.6',
         'Contextual>=0.7a1dev-r2410,==dev', 'Extremes>=1.1',
-    ],
+    ], tests_require = ['mocker>=0.9.2']
 )

@@ -13,8 +13,10 @@ __all__ = [
     'CircularityError', 'LocalController',
 ]
 
+
 class CircularityError(Exception):
     """Rules arranged in an infinite loop"""
+
 
 class AbstractSubject(object):
     """Abstract base for objects that can be linked via ``Link`` objects"""
@@ -35,8 +37,6 @@ class AbstractSubject(object):
             if ob is not None:
                 yield ob
             link = nxt
-
-
 
 
 class AbstractListener(object):
@@ -106,7 +106,7 @@ class Link(weakref.ref):
         prev = self.prev_listener
         if nxt is not None:
             nxt.prev_listener = prev
-        if prev is not None:
+        if prev is not None and prev.next_listener is self:
             prev.next_listener = nxt
         prev = self.prev_subject
         nxt = self.next_subject
@@ -295,7 +295,7 @@ class Controller(STMHistory):
             if old is not None:
                 assert listener not in self.has_run, "Repeat of nested run()"
                 self.last_listener = listener  # undo not needed due to nesting
-                self.has_run[listener] = old
+                self.has_run[listener] = self.has_run[old]
                 old_reads, self.reads = self.reads, {}
                 try:
                     listener.run()
@@ -305,14 +305,14 @@ class Controller(STMHistory):
             else:
                 if listener in self.has_run:
                     self._retry(listener)
-                    if self.has_run[listener] is not None:
+                    if self.has_run[listener] is not listener:
                         # The rule was nested inside another rule, so rerun
                         # the *outer* rule instead
                         self.schedule(self.has_run[listener])
                         return
                 self.setattr(self, 'last_save', self.savepoint())
                 self.setattr(self, 'last_listener', listener)
-                self.has_run[listener] = None
+                self.has_run[listener] = listener
                 try:
                     listener.run()
                     self._process_writes(listener)
@@ -336,10 +336,11 @@ class Controller(STMHistory):
         self.setattr(self, 'last_notified', notified)
         writes = self.writes
         layer = listener.layer
+        has_run = self.has_run
         while writes:
             subject, ignore = writes.popitem()
             for dependent in subject.iter_listeners():
-                if dependent is not listener:
+                if has_run.get(dependent) is not listener:
                     if dependent.dirty():
                         self.schedule(dependent, layer)
                         notified[dependent] = 1
@@ -429,7 +430,7 @@ class Controller(STMHistory):
             retval = func(*args, **kw)
             layers = self.layers
             queues = self.queues
-            while layers:
+            while layers or self.at_commit:
                 while layers:
                     q = queues[layers[0]]
                     if q:
@@ -477,9 +478,255 @@ class LocalController(Controller, threading.local):
 
 ctrl = LocalController()
 
+class AbstractCell(object):
+    """Base class for cells"""
+    __slots__ = ()
+
+    value = None
+
+    def get_value(self):
+        """Get the value of this cell"""
+        return self.value
+
+from trellis import _sentinel, InputConflict    # XXX
+
+
+class _ReadValue(AbstractSubject, AbstractCell):
+    """Base class for readable cells"""
+
+    __slots__ = '_value', 'next_listener', '_set_by', '_reset', # XXX 'manager'
+    
+    def __init__(self, value=None, discrete=False):
+        self._value = value
+        self._set_by = _sentinel
+        AbstractSubject.__init__(self)
+        self._reset = (_sentinel, value)[bool(discrete)]
+        
+    def get_value(self):
+        if ctrl.active:
+            # if atomic, make sure we're locked and consistent
+            ctrl.used(self)
+        return self._value
+
+    value = property(get_value)
+
+    def _finish(self):
+        if self._set_by is not _sentinel:
+            ctrl.setattr(self, '_set_by', _sentinel)
+        if self._reset is not _sentinel and self._value != self._reset:
+            ctrl.setattr(self, '_value', self._reset)
+            ctrl.changed(self)
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+class Value(_ReadValue):
+    """A read-write value with optional discrete mode"""
+
+    __slots__ = ()
+    
+    def set_value(self, value):
+        if not ctrl.active:
+            return ctrl.atomically(self.set_value, value)
+
+        ctrl.lock(self)
+        if self._set_by is _sentinel:
+            ctrl.setattr(self, '_set_by', ctrl.current_listener)
+            ctrl.on_commit(self._finish)
+
+        if value==self._value:
+            return  # no change, no foul...
+
+        if self._set_by is not ctrl.current_listener:
+            # already set by someone else
+            raise InputConflict(self._value, value) # XXX
+
+        ctrl.setattr(self, '_value', value)        
+        ctrl.changed(self)
+
+    value = property(_ReadValue.get_value.im_func, set_value)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class ReadOnlyCell(_ReadValue, AbstractListener):
+    """A cell with a rule"""
+
+    __slots__ = 'rule', '_needs_init', 'next_subject', '__weakref__', 'layer'
+
+    def __init__(self, rule, value=None, discrete=False):
+        super(ReadOnlyCell, self).__init__(value, discrete)
+        AbstractListener.__init__(self)
+        self._needs_init = True
+        self.rule = rule
+        self.layer = 0
+
+    def get_value(self):
+        if self._needs_init:
+            if not ctrl.active:
+                # initialization must be atomic
+                return ctrl.atomically(self.get_value)
+            ctrl.setattr(self, '_needs_init', False)
+            ctrl.run(self)
+        if ctrl.current_listener is not None:
+            ctrl.used(self)
+        return self._value               
+
+    value = property(get_value)
+        
+    def run(self):
+        value = self.rule()
+        if value!=self._value:
+            if self._set_by is _sentinel:
+                ctrl.setattr(self, '_set_by', self)
+                ctrl.on_commit(self._finish)
+            ctrl.setattr(self, '_value', value)
+            ctrl.changed(self)
+
+
+
+
+
+
+
+
+    def _finish(self):
+        super(ReadOnlyCell, self)._finish()
+
+        if self.next_subject is None and (
+            self._reset is _sentinel or self._value==self._reset
+        ):
+            ctrl.setattr(self, '_set_by', _sentinel)
+            ctrl.setattr(self, 'rule', None)
+            ctrl.setattr(self, 'next_listener', None)
+            ctrl.setattr(self, '__class__', ConstantRule)
+
+
+class _ConstantMixin(AbstractCell):
+    """A read-only abstract cell"""
+
+    __slots__ = ()
+
+    def __setattr__(self, name, value):
+        """Constants can't be changed"""
+        raise AttributeError("Constants can't be changed")
+
+    def __repr__(self):
+        return "Constant(%r)" % (self.value,)
+
+
+class Constant(_ConstantMixin):
+    """A pure read-only value"""
+
+    __slots__ = 'value'
+
+    def __init__(self, value):
+        Constant.value.__set__(self, value)
+
+
+
+
+
+
+
+
+
+class ConstantRule(_ConstantMixin, ReadOnlyCell):
+    """A read-only cell that no longer depends on anything else"""
+
+    __slots__ = ()
+
+    value = ReadOnlyCell._value
+
+    def dirty(self):
+        """Constants don't need recalculation"""
+        return False
+
+    def run(self):
+        """Constants don't run"""
+
+    def __setattr__(self, name, value):
+        """Constants can't be changed"""
+        if name == '__class__':
+            object.__setattr__(self, name, value)
+        else:
+            super(ConstantRule, self).__setattr__(name, value)
+    
+
+'''class Observer(AbstractListener, AbstractCell):
+    """Rule that performs non-undoable actions"""
+
+    __slots__ = 'rule', 'next_subject', '__weakref__'
+
+    layer = Max
+    value = None
+
+    def __init__(self, rule):
+        self.rule = rule
+        super(Observer, self).__init__()
+
+    def run(self):
+        self.rule()
+
+    def get_value(self):
+        return self.value
+'''
+    
+class Cell(ReadOnlyCell, Value):
+    """Spreadsheet-like cell with automatic updating"""
+
+    __slots__ = ()
+
+    def __new__(cls, rule=None, value=_sentinel, discrete=False):
+        if rule is None:
+            return Value(value, discrete)
+        elif value is _sentinel:
+            return ReadOnlyCell(rule, None, discrete)
+        return ReadOnlyCell.__new__(cls, rule, value, discrete)
+    
+    _finish = Value._finish.im_func     # we can never become Constant
+
+    value = property(ReadOnlyCell.get_value.im_func, Value.set_value.im_func)
+
+    '''def dirty(self):
+        # If we've been manually set, don't reschedule
+        who = self._set_by
+        return who is _sentinel or who is self
+
+    def run(self):
+        if self.dirty():
+            # Nominal case: the value hasn't been set in this txn, or was only
+            # set by the rule itself.
+            super(Cell, self).run()
+        elif self._needs_init:
+            # Initialization case: value was set before reading, so we ignore
+            # the return value of the rule and leave our current value as-is,
+            # but of course now we will notice any future changes
+            self.rule()'''
 
 
 

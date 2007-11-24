@@ -4,7 +4,7 @@ from peak.events.activity import EventLoop, TwistedEventLoop, Time, NOT_YET
 from peak.events import trellis, stm
 from peak.util.decorators import rewrap, decorate as d
 from peak.util.extremes import Max
-import unittest, heapq
+import unittest, heapq, mocker
 
 try:
     import testreactor
@@ -341,7 +341,7 @@ class TestController(unittest.TestCase):
         self.ctrl.changed(self.s1)
         self.ctrl.changed(self.s2)
         self.assertEqual(self.ctrl.writes, {self.s1:1, self.s2:1})
-        sp = self.ctrl.savepoint()
+        sp = self.ctrl.savepoint(); self.ctrl.has_run[self.t1] = self.t1
         self.ctrl._process_writes(self.t1)
         # Only t0 is notified, not t1, since t1 is the listener
         self.assertEqual(self.ctrl.last_notified, {self.t0: 1})
@@ -376,13 +376,13 @@ class TestController(unittest.TestCase):
         def rule():
             self.assertEqual(self.ctrl.current_listener, self.t1)
             self.assertEqual(self.ctrl.last_listener, self.t1)
-            self.assertEqual(self.ctrl.has_run, {self.t1: None})
+            self.assertEqual(self.ctrl.has_run, {self.t1: self.t1})
         sp = self.ctrl.savepoint()
         self.runAs(self.t1, rule)
         self.assertEqual(self.ctrl.last_save, sp)
         self.assertEqual(self.ctrl.current_listener, None)
         self.assertEqual(self.ctrl.last_listener, self.t1)
-        self.assertEqual(self.ctrl.has_run, {self.t1: None})
+        self.assertEqual(self.ctrl.has_run, {self.t1: self.t1})
         self.ctrl.rollback_to(sp)   # should clear last_listener, last_save
 
     d(a)
@@ -572,26 +572,6 @@ class TestController(unittest.TestCase):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     d(a)
     def testNestedRule(self):
         def rule1():
@@ -622,12 +602,258 @@ class TestController(unittest.TestCase):
         self.runAs(self.t0, rule0)
         self.runAs(self.t1, rule1)
         self.assertEqual(self.ctrl.has_run,
-            {self.t1:None, self.t2:self.t1, self.t0: None}
+            {self.t1:self.t1, self.t2:self.t1, self.t0: self.t0}
         )
         self.assertEqual(list(self.t1.iter_subjects()), [self.s1])
         self.assertEqual(list(self.t2.iter_subjects()), [self.s2])
         self.ctrl.rollback_to(self.ctrl.last_save)  # should undo both t1/t2
         self.assertEqual(self.ctrl.last_listener, self.t0)
+
+
+
+
+
+    def testCommitCanLoop(self):
+        log=[]
+        def go():
+            log.append(True)
+        self.t0.run = go
+        self.ctrl.atomically(self.ctrl.on_commit, self.ctrl.schedule, self.t0)
+        self.assertEqual(log,[True])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class TestCells(mocker.MockerTestCase):
+
+    ctrl = stm.ctrl
+
+    def testValueBasics(self):
+        self.failUnless(issubclass(stm.Value, stm.AbstractCell))
+        self.failUnless(issubclass(stm.Value, stm.AbstractSubject))
+        v = stm.Value()
+        self.assertEqual(v.value, None)
+        self.assertEqual(v._set_by, stm._sentinel)
+        self.assertEqual(v._reset, stm._sentinel)
+        v.value = 21
+        self.assertEqual(v._set_by, stm._sentinel)
+
+    d(a)
+    def testValueUndo(self):
+        v = stm.Value(42)
+        self.assertEqual(v.value, 42)
+        sp = self.ctrl.savepoint()
+        v.value = 43
+        self.assertEqual(v.value, 43)
+        self.ctrl.rollback_to(sp)
+        self.assertEqual(v.value, 42)
+
+    d(a)
+    def testValueUsed(self):
+        v = stm.Value(42)
+        ctrl = self.mocker.replace(self.ctrl) #'peak.events.stm.ctrl')
+        ctrl.used(v)
+        self.mocker.replay()
+        self.assertEqual(v.value, 42)
+
+    def testValueChanged(self):
+        v = stm.Value(42)
+        ctrl = self.mocker.replace(self.ctrl)
+        ctrl.lock(v)
+        ctrl.changed(v)
+        self.mocker.replay()
+        v.value = 43
+        self.assertEqual(v.value, 43)
+
+    def testValueUnchanged(self):
+        v = stm.Value(42)
+        ctrl = self.mocker.replace(self.ctrl)
+        ctrl.lock(v)
+        mocker.expect(ctrl.changed(v)).count(0)
+        self.mocker.replay()
+        v.value = 42
+        self.assertEqual(v.value, 42)
+
+    d(a)
+    def testValueSetLock(self):
+        v = stm.Value(42)
+        v.value = 43
+        self.assertEqual(v.value, 43)
+        self.assertEqual(v._set_by, None)
+        def go():
+            v.value = 99
+        t = TestListener()
+        t.run = go
+        self.assertRaises(stm.InputConflict, self.ctrl.run, t)
+        self.assertEqual(v.value, 43)
+        def go():
+            v.value = 43
+        t = TestListener()
+        t.run = go
+        self.ctrl.run(t)
+        self.assertEqual(v.value, 43)
+            
+    def testDiscrete(self):
+        v = stm.Value(None, True)
+        v.value = 42
+        self.assertEqual(v.value, None)
+
+
+
+
+
+
+
+
+
+    def testReadOnlyCellBasics(self):
+        log = []
+        c = stm.Cell(lambda:log.append(1))
+        self.failUnless(type(c) is stm.ReadOnlyCell)
+        c.value
+        self.assertEqual(log,[1])
+        c.value
+        self.assertEqual(log,[1])
+
+    def testDiscreteValue(self):
+        log = []
+        v = stm.Value(False, True)
+        c = stm.Cell(lambda: log.append(v.value))
+        self.assertEqual(log,[])
+        c.value        
+        self.assertEqual(log,[False])
+        del log[:]
+        v.value = True
+        self.assertEqual(log, [True, False])
+        self.assertEqual(v.value, False)
+        del log[:]
+        v.value = False
+        self.assertEqual(log, [])
+
+    def testCellConstructor(self):
+        self.failUnless(type(stm.Cell(value=42)) is stm.Value)
+        self.failUnless(type(stm.Cell(lambda:42)) is stm.ReadOnlyCell)
+        self.failUnless(type(stm.Cell(lambda:42, value=42)) is stm.Cell)
+
+    def testRuleChain(self):
+        v = stm.Value(0)
+        log = []
+        c1 = stm.Cell(lambda:int(v.value/2))
+        c2 = stm.Cell(lambda:log.append(c1.value))
+        c2.value
+        self.assertEqual(log, [0])
+        v.value = 1
+        self.assertEqual(log, [0])
+        v.value = 2        
+        self.assertEqual(log, [0, 1])
+
+    def testConstant(self):
+        for v in (42, [57], "blah"):
+            c = stm.Constant(v)
+            self.assertEqual(c.value, v)
+            self.assertEqual(c.get_value(), v)
+            self.failIf(hasattr(c,'set_value'))
+            self.assertRaises(AttributeError, setattr, c, 'value', v)
+            self.assertEqual(repr(c), "Constant(%r)" % (v,))
+
+    def testRuleToConstant(self):
+        log = []
+        def go():
+            log.append(1)
+            return 42
+        c = stm.Cell(go)
+        self.assertEqual(c.value, 42)
+        self.assertEqual(log, [1])
+        self.failUnless(isinstance(c, stm.ConstantRule))
+        self.assertEqual(repr(c), "Constant(42)")
+        self.assertEqual(c.value, 42)
+        self.assertEqual(c.get_value(), 42)
+        self.assertEqual(c.rule, None)
+        self.assertEqual(log, [1])
+        self.failIf(c.dirty())
+        c.__class__ = stm.ReadOnlyCell  # transition must be reversible to undo
+        self.failIf(isinstance(c, stm.ConstantRule))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def testDiscreteToConstant(self):
+        log = []
+        c1 = stm.ReadOnlyCell(lambda:True, False, True)
+        c2 = stm.Cell(lambda:log.append(c1.value))
+        c2.value
+        self.assertEqual(log, [True, False])
+        self.failUnless(isinstance(c1, stm.ConstantRule))
+        
+    def testReadWriteCells(self):
+        C = stm.Cell(lambda: (F.value-32) * 5.0/9, -40)
+        F = stm.Cell(lambda: (C.value * 9.0)/5 + 32, -40)
+        self.assertEqual(C.value, -40)
+        self.assertEqual(F.value, -40)
+        C.value = 0
+        self.assertEqual(C.value, 0)
+        self.assertEqual(F.value, 32)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
