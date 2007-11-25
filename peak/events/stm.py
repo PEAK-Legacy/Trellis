@@ -24,6 +24,7 @@ class AbstractSubject(object):
     __slots__ = ()
 
     manager = None
+    layer = 0
 
     def __init__(self):
         self.next_listener = None
@@ -37,7 +38,6 @@ class AbstractSubject(object):
             if ob is not None:
                 yield ob
             link = nxt
-
 
 class AbstractListener(object):
     """Abstract base for objects that can be linked via ``Link`` objects"""
@@ -296,7 +296,7 @@ class Controller(STMHistory):
 
             if old is not None:
                 self.has_run[listener] = self.has_run[old]
-                self.on_undo(self.has_run.__delitem__, listener)
+                self.on_undo(self.has_run.pop, listener, None)
 
                 old_reads, self.reads = self.reads, {}
                 try:
@@ -309,7 +309,7 @@ class Controller(STMHistory):
                 self.setattr(self, 'last_save', self.savepoint())
                 self.setattr(self, 'last_listener', listener)
                 self.has_run[listener] = listener
-                self.on_undo(self.has_run.__delitem__, listener)
+                self.on_undo(self.has_run.pop, listener, None)
                 try:
                     listener.run()
                     self._process_writes(listener)
@@ -457,8 +457,11 @@ class Controller(STMHistory):
 
     def used(self, subject):
         self.lock(subject)
-        if self.current_listener is not None:
+        cl = self.current_listener
+        if cl is not None and subject not in self.reads:
             self.reads[subject] = 1
+            if subject.layer >= cl.layer:
+                cl.layer = subject.layer + 1
 
     def changed(self, subject):
         self.lock(subject)
@@ -477,6 +480,16 @@ class LocalController(Controller, threading.local):
 
 ctrl = LocalController()
 
+from trellis import _sentinel, InputConflict    # XXX
+
+
+
+
+
+
+
+
+
 class AbstractCell(object):
     """Base class for cells"""
     __slots__ = ()
@@ -487,7 +500,35 @@ class AbstractCell(object):
         """Get the value of this cell"""
         return self.value
 
-from trellis import _sentinel, InputConflict    # XXX
+    def __repr__(self):
+        rule = reset = ''
+        if getattr(self, 'rule', None) is not None:
+            rule = repr(self.rule)+', '
+        if getattr(self, '_reset', _sentinel) is not _sentinel:
+            reset =' ['+repr(self._reset)+']'
+        return '%s(%s%r%s)'% (self.__class__.__name__, rule, self.value, reset)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class _ReadValue(AbstractSubject, AbstractCell):
