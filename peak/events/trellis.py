@@ -480,7 +480,7 @@ class DummyAction(Constant):
         Constant.__init__(self, None)
 
 
-
+AbstractCell = ReadOnlyCell     # XXX
 
 
 
@@ -597,7 +597,7 @@ class CellProperty(object):
     def __set__(self, ob, value):
         try: cells = ob.__cells__
         except AttributeError: cells = Cells(ob)
-        if isinstance(value, ReadOnlyCell):
+        if isinstance(value, AbstractCell):
             cells[self.__name__] = value
         else:
             try:

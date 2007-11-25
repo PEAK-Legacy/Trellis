@@ -1059,3 +1059,66 @@ Component __init__ code always runs as though it were inside an @action or
       ...
     InputConflict: (1, 2)
 
+
+
+Cell and Component Initialization
+---------------------------------
+
+Same tests as above, but with stm.Cell objects:
+
+>>> from peak.events import stm
+
+This bit tests whether a rule gets to fire when a cell's value is initialized.
+When you set a ruled cell's value before computing its value, the "old" value
+should be the passed-in value, and the "new" value should be the assigned
+value (overriding the rule)::
+
+    >>> def aRule():
+    ...     print "running", c.value
+    ...     return 42
+
+    >>> c = stm.Cell(aRule, 96)
+    >>> c.value = 27
+    running 27
+    >>> c.value
+    27
+
+And if the setting occurs in a modifier or action rule, the rule's execution
+should be deferred until the current calculation/rule is complete, thereby
+allowing several cells to be simultaneously pre-set and initialized at once::
+
+    >>> c = stm.Cell(aRule, 96)
+    >>> def go():
+    ...     c.value = 27
+    ...     print "finished setting", c.value
+
+    >>> stm.ctrl.atomically(go)
+    finished setting 27
+    running 27
+
+    >>> c.value
+    27
+
+Observers::
+
+    >>> v = stm.Value(26)
+    >>> def o():
+    ...     print "value is", v.value
+    >>> o = stm.Observer(o)
+    value is 26
+    >>> v.value = 27
+    value is 27
+
+    >>> o.layer
+    Max
+
+    >>> def fail():
+    ...     v.value = 99
+
+    >>> stm.Observer(fail)
+    Traceback (most recent call last):
+      ...
+    RuntimeError: Can't change objects during commit phase
+
+
+

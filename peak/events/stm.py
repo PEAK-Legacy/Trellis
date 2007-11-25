@@ -257,33 +257,33 @@ class Controller(STMHistory):
         self.has_run = {}   # listeners that have run
         self.layers = []    # heap of layer numbers
         self.queues = {}    # [layer]    -> dict of listeners to be run
+        self.to_retry = {}
 
     def cleanup(self, *args):
         try:
+            self.has_run.clear()
             return super(Controller, self).cleanup(*args)
         finally:
-            self.has_run.clear()
             self.current_listener = self.last_listener = None
             self.last_notified = self.last_save = None
 
-    def _retry(self, listener):
-        # undo back through listener, watching to detect cycles
-        destinations = set([listener])
-        routes = {} # tree of rules that (re)triggered the original listener
-        while True:
-            this = self.last_listener
-            if self.last_notified:
-                via = destinations.intersection(self.last_notified)
-                if via:
-                    routes[this] = via
-                    destinations.add(this)
-            self.rollback_to(self.last_save)
-            if this is listener:
-                break
-        if listener in routes:
-            raise CircularityError(routes)
-
-
+    def _retry(self):
+        try:    # undo back through listener, watching to detect cycles
+            todo = self.to_retry.copy(); destinations = set(todo)
+            routes = {} # tree of rules that (re)triggered the original listener
+            while todo:
+                this = self.last_listener
+                if self.last_notified:
+                    via = destinations.intersection(self.last_notified)
+                    if via:
+                        routes[this] = via; destinations.add(this)
+                self.rollback_to(self.last_save)
+                if this in todo: del todo[this]
+            for item in self.to_retry:
+                if item in routes:
+                    raise CircularityError(routes)
+        finally:
+            self.to_retry.clear()
 
     def run(self, listener):
         """Run the specified listener"""
@@ -292,27 +292,24 @@ class Controller(STMHistory):
         if listener.layer is Max:
             self.readonly = True
         try:
+            assert listener not in self.has_run, "Re-run of rule without retry"
+
             if old is not None:
-                assert listener not in self.has_run, "Repeat of nested run()"
-                self.last_listener = listener  # undo not needed due to nesting
                 self.has_run[listener] = self.has_run[old]
+                self.on_undo(self.has_run.__delitem__, listener)
+
                 old_reads, self.reads = self.reads, {}
                 try:
                     listener.run()
                     self._process_reads(listener)
                 finally:
                     self.reads = old_reads
+
             else:
-                if listener in self.has_run:
-                    self._retry(listener)
-                    if self.has_run[listener] is not listener:
-                        # The rule was nested inside another rule, so rerun
-                        # the *outer* rule instead
-                        self.schedule(self.has_run[listener])
-                        return
                 self.setattr(self, 'last_save', self.savepoint())
                 self.setattr(self, 'last_listener', listener)
                 self.has_run[listener] = listener
+                self.on_undo(self.has_run.__delitem__, listener)
                 try:
                     listener.run()
                     self._process_writes(listener)
@@ -324,6 +321,9 @@ class Controller(STMHistory):
         finally:
             self.current_listener = old
             self.readonly = False
+
+
+
 
 
     def _process_writes(self, listener):
@@ -367,7 +367,6 @@ class Controller(STMHistory):
                 (Link(subjects.popitem()[0], listener).unlink, ())
             )
 
-
     def schedule(self, listener, source_layer=None, reschedule=False):
         """Schedule `listener` to run during an atomic operation
 
@@ -382,15 +381,19 @@ class Controller(STMHistory):
         """
         new = old = listener.layer
         get = self.queues.get
+        assert not self.readonly or old is Max, \
+            "Shouldn't be scheduling a non-Observer during commit"
 
         if source_layer is not None and source_layer >= listener.layer:
             new = source_layer + 1
+
+        if listener in self.has_run:
+            self.to_retry[self.has_run[listener]]=1
 
         q = get(old)
         if q and listener in q:
             if new is not old:
                 self.cancel(listener)
-
         elif self.active and not reschedule:
             self.on_undo(self.cancel, listener)
 
@@ -403,10 +406,6 @@ class Controller(STMHistory):
              heapq.heappush(self.layers, new)
         else:
             q[listener] = 1
-
-
-
-
 
 
     def cancel(self, listener):
@@ -432,6 +431,8 @@ class Controller(STMHistory):
             queues = self.queues
             while layers or self.at_commit:
                 while layers:
+                    if self.to_retry:
+                        self._retry()
                     q = queues[layers[0]]
                     if q:
                         listener = q.popitem()[0]
@@ -446,8 +447,6 @@ class Controller(STMHistory):
             del self.layers[:]
             self.queues.clear()
             raise
-
-
 
 
     def lock(self, subject):
@@ -495,13 +494,13 @@ class _ReadValue(AbstractSubject, AbstractCell):
     """Base class for readable cells"""
 
     __slots__ = '_value', 'next_listener', '_set_by', '_reset', # XXX 'manager'
-    
+
     def __init__(self, value=None, discrete=False):
         self._value = value
         self._set_by = _sentinel
         AbstractSubject.__init__(self)
         self._reset = (_sentinel, value)[bool(discrete)]
-        
+
     def get_value(self):
         if ctrl.active:
             # if atomic, make sure we're locked and consistent
@@ -536,7 +535,7 @@ class Value(_ReadValue):
     """A read-write value with optional discrete mode"""
 
     __slots__ = ()
-    
+
     def set_value(self, value):
         if not ctrl.active:
             return ctrl.atomically(self.set_value, value)
@@ -553,7 +552,7 @@ class Value(_ReadValue):
             # already set by someone else
             raise InputConflict(self._value, value) # XXX
 
-        ctrl.setattr(self, '_value', value)        
+        ctrl.setattr(self, '_value', value)
         ctrl.changed(self)
 
     value = property(_ReadValue.get_value.im_func, set_value)
@@ -590,15 +589,16 @@ class ReadOnlyCell(_ReadValue, AbstractListener):
             if not ctrl.active:
                 # initialization must be atomic
                 return ctrl.atomically(self.get_value)
-            ctrl.setattr(self, '_needs_init', False)
             ctrl.run(self)
         if ctrl.current_listener is not None:
             ctrl.used(self)
-        return self._value               
+        return self._value
 
     value = property(get_value)
-        
+
     def run(self):
+        if self._needs_init:
+            ctrl.setattr(self, '_needs_init', False)
         value = self.rule()
         if value!=self._value:
             if self._set_by is _sentinel:
@@ -606,7 +606,6 @@ class ReadOnlyCell(_ReadValue, AbstractListener):
                 ctrl.on_commit(self._finish)
             ctrl.setattr(self, '_value', value)
             ctrl.changed(self)
-
 
 
 
@@ -675,27 +674,27 @@ class ConstantRule(_ConstantMixin, ReadOnlyCell):
             object.__setattr__(self, name, value)
         else:
             super(ConstantRule, self).__setattr__(name, value)
-    
 
-'''class Observer(AbstractListener, AbstractCell):
+
+class Observer(AbstractListener, AbstractCell):
     """Rule that performs non-undoable actions"""
 
-    __slots__ = 'rule', 'next_subject', '__weakref__'
+    __slots__ = 'run', 'next_subject', '__weakref__'
 
     layer = Max
-    value = None
 
     def __init__(self, rule):
-        self.rule = rule
+        self.run = rule
         super(Observer, self).__init__()
+        if not ctrl.active:
+            return ctrl.atomically(ctrl.schedule, self)
+        else:
+            ctrl.schedule(self)
 
-    def run(self):
-        self.rule()
+Observer.rule = Observer.run    # alias the attribute for inspection
 
-    def get_value(self):
-        return self.value
-'''
-    
+
+
 class Cell(ReadOnlyCell, Value):
     """Spreadsheet-like cell with automatic updating"""
 
@@ -707,15 +706,35 @@ class Cell(ReadOnlyCell, Value):
         elif value is _sentinel:
             return ReadOnlyCell(rule, None, discrete)
         return ReadOnlyCell.__new__(cls, rule, value, discrete)
-    
+
     _finish = Value._finish.im_func     # we can never become Constant
 
-    value = property(ReadOnlyCell.get_value.im_func, Value.set_value.im_func)
+    def get_value(self):
+        if self._needs_init:
+            if not ctrl.active:
+                # initialization must be atomic
+                return ctrl.atomically(self.get_value)
+            if self._set_by is _sentinel:
+                # No value set yet, so we have to run() first
+                ctrl.run(self)
+        if ctrl.current_listener is not None:
+            ctrl.used(self)
+        return self._value
 
-    '''def dirty(self):
+    def set_value(self, value):
+        if not ctrl.active:
+            return ctrl.atomically(self.set_value, value)
+        super(Cell, self).set_value(value)
+        if self._needs_init:
+            ctrl.schedule(self)
+
+    value = property(get_value, set_value)
+
+    def dirty(self):
         # If we've been manually set, don't reschedule
         who = self._set_by
         return who is _sentinel or who is self
+
 
     def run(self):
         if self.dirty():
@@ -726,7 +745,28 @@ class Cell(ReadOnlyCell, Value):
             # Initialization case: value was set before reading, so we ignore
             # the return value of the rule and leave our current value as-is,
             # but of course now we will notice any future changes
-            self.rule()'''
+            ctrl.setattr(self, '_needs_init', False)
+            self.rule()
+        else:
+            # It should be impossible to get here unless you run() the cell
+            # manually.
+            raise AssertionError("This should never happen!")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

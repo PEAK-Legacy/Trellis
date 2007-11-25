@@ -29,14 +29,14 @@ class EventLoopTestCase(unittest.TestCase):
     def configure_context(self):
         pass
 
-class TestListener(stm.AbstractListener): pass
-class TestSubject(stm.AbstractSubject): pass
+class TestListener(stm.AbstractListener):
+    def __repr__(self): return self.name
+class TestSubject(stm.AbstractSubject):
+    def __repr__(self): return self.name
 class DummyError(Exception): pass
 class UndirtyListener(TestListener):
     def dirty(self):
         return False
-
-
 
 
 if wx:
@@ -124,10 +124,10 @@ if testreactor:
 class TestLinks(unittest.TestCase):
 
     def setUp(self):
-        self.l1 = TestListener()
-        self.l2 = TestListener()
-        self.s1 = TestSubject()
-        self.s2 = TestSubject()
+        self.l1 = TestListener(); self.l1.name = 'l1'
+        self.l2 = TestListener(); self.l1.name = 'l2'
+        self.s1 = TestSubject(); self.s1.name = 's1'
+        self.s2 = TestSubject(); self.s2.name = 's2'
         self.lk11 = stm.Link(self.s1, self.l1)
         self.lk12 = stm.Link(self.s1, self.l2)
         self.lk21 = stm.Link(self.s2, self.l1)
@@ -207,11 +207,12 @@ class TestController(unittest.TestCase):
 
     def setUp(self):
         self.ctrl = stm.Controller()
-        self.t0 = TestListener()
-        self.t1 = TestListener(); self.t1.layer = 1
-        self.t2 = TestListener(); self.t2.layer = 2
-        self.t3 = UndirtyListener()
+        self.t0 = TestListener(); self.t0.name='t0';
+        self.t1 = TestListener(); self.t1.name='t1'; self.t1.layer = 1
+        self.t2 = TestListener(); self.t2.name='t2'; self.t2.layer = 2
+        self.t3 = UndirtyListener(); self.t3.name='t3'
         self.s1 = TestSubject(); self.s2 = TestSubject()
+        self.s1.name = 's1'; self.s2.name = 's2'
 
     def tearDown(self):
         # Verify correct cleanup in all scenarios
@@ -219,14 +220,14 @@ class TestController(unittest.TestCase):
             undo=[], managers={}, queues={}, layers=[], reads={}, writes={},
             has_run={}, last_listener=None, last_notified=None, last_save=None,
             current_listener=None, readonly=False, in_cleanup=False,
-            active=False, at_commit=[]
+            active=False, at_commit=[], to_retry={}
         ).items():
             val = getattr(self.ctrl, k)
             self.assertEqual(val, v, '%s: %r' % (k,val))
 
     def testScheduleSimple(self):
-        t1 = TestListener()
-        t2 = TestListener()
+        t1 = TestListener(); t1.name='t1'
+        t2 = TestListener(); t2.name='t2'
         self.assertEqual(self.ctrl.layers, [])
         self.assertEqual(self.ctrl.queues, {})
         self.ctrl.schedule(t1)
@@ -242,7 +243,6 @@ class TestController(unittest.TestCase):
     def testThreadLocalController(self):
         self.failUnless(isinstance(stm.ctrl, stm.Controller))
         self.failUnless(isinstance(stm.ctrl, stm.threading.local))
-
 
     def testHeapingCancel(self):
         # verify that cancelling the last listener of a layer keeps
@@ -482,11 +482,11 @@ class TestController(unittest.TestCase):
         self.runAs(self.t1, rule1)
         self.runAs(self.t2, rule2)
         try:
-            self.runAs(self.t0, rule0)
+            self.ctrl._retry()
         except stm.CircularityError, e:
             self.assertEqual(e.args[0],
                 {self.t0: set([self.t1]), self.t1: set([self.t2]),
-                 self.t2: set([self.t0])})
+                 self.t2: set([self.t0, self.t1])})
         else:
             raise AssertionError("Should've caught a cycle")
 
@@ -498,10 +498,12 @@ class TestController(unittest.TestCase):
         self.runAs(self.t0, rule)
         self.runAs(self.t1, rule)
         self.runAs(self.t2, rule)
-        self.ctrl._retry(self.t1)
+        self.ctrl.to_retry[self.t1]=1
+        self.ctrl._retry(); self.ctrl.to_retry.clear()
         self.assertEqual(self.ctrl.last_listener, self.t0)
         self.assertEqual(self.ctrl.last_save, sp)
-        self.ctrl._retry(self.t0)
+        self.ctrl.to_retry[self.t0]=1
+        self.ctrl._retry(); self.ctrl.to_retry.clear()
         self.assertEqual(self.ctrl.last_save, None)
 
     d(a)
@@ -511,13 +513,14 @@ class TestController(unittest.TestCase):
         def rule1():
             pass
         def rule2():
-            raise AssertionError("I should not be run")
+            pass #raise AssertionError("I should not be run")
         self.runAs(self.t2, rule1)
         self.runAs(self.t0, rule0)
-        self.runAs(self.t1, rule2)
+        self.ctrl.schedule(self.t1)
+        self.assertEqual(self.ctrl.to_retry, {self.t0:1})
+        self.ctrl._retry()
         self.assertEqual(self.ctrl.last_listener, self.t2)
-        self.assertEqual(self.ctrl.queues, {0: {self.t0:1}})
-        self.ctrl.cancel(self.t0)
+        self.assertEqual(self.ctrl.queues, {})
 
     def testRunScheduled(self):
         log = []
@@ -526,9 +529,6 @@ class TestController(unittest.TestCase):
             self.ctrl.schedule(self.t1)
         self.ctrl.atomically(go)
         self.assertEqual(log, [True])
-
-
-
 
 
     def testRollbackReschedules(self):
@@ -542,7 +542,7 @@ class TestController(unittest.TestCase):
             self.ctrl.schedule(self.t0)
             sp.append(self.ctrl.savepoint())
         self.ctrl.atomically(go)
-        
+
     def testManagerCanCreateLoop(self):
         class Mgr:
             def __enter__(self): pass
@@ -582,13 +582,13 @@ class TestController(unittest.TestCase):
             self.assertEqual(self.ctrl.reads, {self.s1:1})
             self.assertEqual(self.ctrl.writes, {self.s2:1})
             self.runAs(self.t2, rule2)
-            self.assertEqual(self.ctrl.last_listener, self.t2)
+            self.assertEqual(self.ctrl.last_listener, self.t1)
             self.assertEqual(self.ctrl.current_listener, self.t1)
             self.assertEqual(self.ctrl.reads, {self.s1:1})
             self.assertEqual(self.ctrl.writes, {self.s2:1, s3:1})
 
         def rule2():
-            self.assertEqual(self.ctrl.last_listener, self.t2)
+            self.assertEqual(self.ctrl.last_listener, self.t1)
             self.assertEqual(self.ctrl.current_listener, self.t2)
             self.assertEqual(self.ctrl.reads, {})
             self.assertEqual(self.ctrl.writes, {self.s2:1})
@@ -712,17 +712,17 @@ class TestCells(mocker.MockerTestCase):
         self.assertEqual(v._set_by, None)
         def go():
             v.value = 99
-        t = TestListener()
+        t = TestListener(); t.name = 't'
         t.run = go
         self.assertRaises(stm.InputConflict, self.ctrl.run, t)
         self.assertEqual(v.value, 43)
         def go():
             v.value = 43
-        t = TestListener()
+        t = TestListener(); t.name = 't'
         t.run = go
         self.ctrl.run(t)
         self.assertEqual(v.value, 43)
-            
+
     def testDiscrete(self):
         v = stm.Value(None, True)
         v.value = 42
@@ -750,7 +750,7 @@ class TestCells(mocker.MockerTestCase):
         v = stm.Value(False, True)
         c = stm.Cell(lambda: log.append(v.value))
         self.assertEqual(log,[])
-        c.value        
+        c.value
         self.assertEqual(log,[False])
         del log[:]
         v.value = True
@@ -774,7 +774,7 @@ class TestCells(mocker.MockerTestCase):
         self.assertEqual(log, [0])
         v.value = 1
         self.assertEqual(log, [0])
-        v.value = 2        
+        v.value = 2
         self.assertEqual(log, [0, 1])
 
     def testConstant(self):
@@ -825,7 +825,7 @@ class TestCells(mocker.MockerTestCase):
         c2.value
         self.assertEqual(log, [True, False])
         self.failUnless(isinstance(c1, stm.ConstantRule))
-        
+
     def testReadWriteCells(self):
         C = stm.Cell(lambda: (F.value-32) * 5.0/9, -40)
         F = stm.Cell(lambda: (C.value * 9.0)/5 + 32, -40)
