@@ -392,17 +392,17 @@ class TestController(unittest.TestCase):
         # last_listener should be cleared by cleanup()
 
     d(a)
-    def testScheduleUndoRedo(self):
+    def testScheduleUndo(self):
         sp = self.ctrl.savepoint()
         self.ctrl.schedule(self.t2)
         self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
         self.ctrl.rollback_to(sp)
         self.assertEqual(self.ctrl.queues, {})
-        self.ctrl.schedule(self.t2, reschedule=True)
-        self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
-        self.ctrl.rollback_to(sp)
-        self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
-        self.ctrl.cancel(self.t2)
+
+
+
+
+
 
 
 
@@ -621,14 +621,14 @@ class TestController(unittest.TestCase):
         self.ctrl.atomically(self.ctrl.on_commit, self.ctrl.schedule, self.t0)
         self.assertEqual(log,[True])
 
-
-
-
-
-
-
-
-
+    d(a)
+    def testNoUndoDuringUndo(self):
+        def undo():
+            self.ctrl.on_undo(redo)
+        def redo():
+            raise AssertionError("Should not be run")
+        self.ctrl.on_undo(undo)
+        self.ctrl.rollback_to(0)
 
 
 

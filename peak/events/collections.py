@@ -162,6 +162,3 @@ class SortedSet(trellis.Component):
 
 
 
-
-
-

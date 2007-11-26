@@ -124,7 +124,7 @@ _unlink_fn = Link.unlink
 class STMHistory(object):
     """Simple STM implementation using undo logging and context managers"""
 
-    active = in_cleanup = False
+    active = in_cleanup = undoing = False
 
     def __init__(self):
         self.undo = []      # [(func,args), ...]
@@ -155,7 +155,7 @@ class STMHistory(object):
     def on_undo(self, func, *args):
         """Call `func(*args)` if atomic operation is undone"""
         assert self.active, "Can't record undo without active history"
-        self.undo.append((func, args))
+        if not self.undoing: self.undo.append((func, args))
 
     def savepoint(self):
         """Get a savepoint suitable for calling ``rollback_to()``"""
@@ -165,11 +165,11 @@ class STMHistory(object):
     def rollback_to(self, sp=0):
         """Rollback to the specified savepoint"""
         assert self.active, "Can't rollback without active history"
-        undo = self.undo
-        while len(undo) > sp:
-            f, a = undo.pop()
-            f(*a)
-
+        undo = self.undo; self.undoing = True
+        try:
+                 while len(undo) > sp: f, a = undo.pop(); f(*a)
+        finally: self.undoing = False
+            
     def cleanup(self, typ=None, val=None, tb=None):
         # Exit the processing loop, unwinding managers
         assert self.active, "Can't exit when inactive"
@@ -367,7 +367,7 @@ class Controller(STMHistory):
                 (Link(subjects.popitem()[0], listener).unlink, ())
             )
 
-    def schedule(self, listener, source_layer=None, reschedule=False):
+    def schedule(self, listener, source_layer=None):
         """Schedule `listener` to run during an atomic operation
 
         If an operation is already in progress, it's immediately scheduled, and
@@ -394,7 +394,7 @@ class Controller(STMHistory):
         if q and listener in q:
             if new is not old:
                 self.cancel(listener)
-        elif self.active and not reschedule:
+        elif self.active and not self.undoing:
             self.on_undo(self.cancel, listener)
 
         if new is not old:
@@ -436,7 +436,7 @@ class Controller(STMHistory):
                     q = queues[layers[0]]
                     if q:
                         listener = q.popitem()[0]
-                        self.on_undo(self.schedule, listener, None, True)
+                        self.on_undo(self.schedule, listener)
                         self.run(listener)
                     else:
                         del queues[layers[0]]
@@ -480,9 +480,9 @@ class LocalController(Controller, threading.local):
 
 ctrl = LocalController()
 
-from trellis import _sentinel, InputConflict    # XXX
-
-
+# XXX
+from trellis import _sentinel, InputConflict, CellFactories, CellValues
+from trellis import CellRules, IsDiscrete, IsOptional, Cells
 
 
 
