@@ -4,7 +4,7 @@ from peak.events.activity import EventLoop, TwistedEventLoop, Time, NOT_YET
 from peak.events import trellis, stm
 from peak.util.decorators import rewrap, decorate as d
 from peak.util.extremes import Max
-import unittest, heapq, mocker
+import unittest, heapq, mocker, types
 
 try:
     import testreactor
@@ -112,7 +112,7 @@ if testreactor:
                     if self.idle_for[self.idle_timeout] and EventLoop.running:
                         log.append(5)
                         EventLoop.stop()
-                alarm = trellis.action(alarm)
+                alarm = trellis.rule(alarm)
 
             it = IdleTimer()
             EventLoop.run()
@@ -241,8 +241,8 @@ class TestController(unittest.TestCase):
         # tearDown will assert that everything has been cleared
 
     def testThreadLocalController(self):
-        self.failUnless(isinstance(stm.ctrl, stm.Controller))
-        self.failUnless(isinstance(stm.ctrl, stm.threading.local))
+        self.failUnless(isinstance(trellis.ctrl, stm.Controller))
+        self.failUnless(isinstance(trellis.ctrl, stm.threading.local))
 
     def testHeapingCancel(self):
         # verify that cancelling the last listener of a layer keeps
@@ -321,7 +321,7 @@ class TestController(unittest.TestCase):
         self.ctrl.used(self.s1)
         self.ctrl.changed(self.s2)
         self.assertEqual(self.ctrl.reads, {self.s1:1})
-        self.assertEqual(self.ctrl.writes, {self.s2:1})
+        self.assertEqual(self.ctrl.writes, {self.s2:self.t0})
         self.ctrl.reads.clear()     # these would normally be handled by
         self.ctrl.writes.clear()    # the run() method's try/finally
 
@@ -330,7 +330,7 @@ class TestController(unittest.TestCase):
     def testNoReadDuringCommit(self):
         self.ctrl.readonly = True
         self.assertRaises(RuntimeError, self.ctrl.changed, self.s1)
-        self.ctrl.readonly = False  # normally reset by ctrl.run()
+        self.ctrl.readonly = False  # normally reset by ctrl.run_rule()
 
     d(a)
     def testRecalcOnWrite(self):
@@ -340,7 +340,7 @@ class TestController(unittest.TestCase):
         self.ctrl.current_listener = self.t1
         self.ctrl.changed(self.s1)
         self.ctrl.changed(self.s2)
-        self.assertEqual(self.ctrl.writes, {self.s1:1, self.s2:1})
+        self.assertEqual(self.ctrl.writes, {self.s1:self.t1, self.s2:self.t1})
         sp = self.ctrl.savepoint(); self.ctrl.has_run[self.t1] = self.t1
         self.ctrl._process_writes(self.t1)
         # Only t0 is notified, not t1, since t1 is the listener
@@ -367,9 +367,9 @@ class TestController(unittest.TestCase):
 
 
 
-    def runAs(self, listener, rule):
+    def runAs(self, listener, rule, initialized=True):
         listener.run = rule
-        self.ctrl.run(listener)
+        self.ctrl.run_rule(listener, initialized)
 
     d(a)
     def testIsRunningAndHasRan(self):
@@ -383,6 +383,20 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.current_listener, None)
         self.assertEqual(self.ctrl.last_listener, self.t1)
         self.assertEqual(self.ctrl.has_run, {self.t1: self.t1})
+        self.ctrl.rollback_to(sp)   # should clear last_listener, last_save
+
+    d(a)
+    def testIsRunningButHasNotRan(self):
+        def rule():
+            self.assertEqual(self.ctrl.current_listener, self.t1)
+            self.assertEqual(self.ctrl.last_listener, None)
+            self.assertEqual(self.ctrl.has_run, {})
+        sp = self.ctrl.savepoint()
+        self.runAs(self.t1, rule, False)    # uninit'd rule
+        self.assertEqual(self.ctrl.last_save, None)
+        self.assertEqual(self.ctrl.current_listener, None)
+        self.assertEqual(self.ctrl.last_listener, None)
+        self.assertEqual(self.ctrl.has_run, {})
         self.ctrl.rollback_to(sp)   # should clear last_listener, last_save
 
     d(a)
@@ -417,7 +431,7 @@ class TestController(unittest.TestCase):
         def rule():
             self.ctrl.changed(self.s1)
             self.ctrl.changed(self.s2)
-            self.assertEqual(self.ctrl.writes, {self.s1:1, self.s2:1})
+            self.assertEqual(self.ctrl.writes, {self.s1:self.t1, self.s2:self.t1})
         self.runAs(self.t1, rule)
         # Only t0 is notified, not t1, since t1 is the listener & t3 is !dirty
         self.assertEqual(self.ctrl.writes, {})
@@ -507,20 +521,29 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.last_save, None)
 
     d(a)
-    def testNestedRetry(self):
+    def testNestedNoRetry(self):
         def rule0():
-            self.runAs(self.t1, rule1)
+            self.runAs(self.t1, rule1, False)
         def rule1():
             pass
-        def rule2():
-            pass #raise AssertionError("I should not be run")
         self.runAs(self.t2, rule1)
         self.runAs(self.t0, rule0)
         self.ctrl.schedule(self.t1)
-        self.assertEqual(self.ctrl.to_retry, {self.t0:1})
-        self.ctrl._retry()
-        self.assertEqual(self.ctrl.last_listener, self.t2)
-        self.assertEqual(self.ctrl.queues, {})
+        self.assertEqual(self.ctrl.to_retry, {})
+        self.assertEqual(self.ctrl.last_listener, self.t0)
+        self.assertEqual(self.ctrl.to_retry, {})
+        self.assertEqual(self.ctrl.queues, {1: {self.t1:1}})
+
+
+
+
+
+
+
+
+
+
+
 
     def testRunScheduled(self):
         log = []
@@ -553,9 +576,15 @@ class TestController(unittest.TestCase):
             log.append(True)
         self.t1.run = rule1
         self.t0.run = lambda:self.ctrl.manage(Mgr())
-        #import pdb; pdb.set_trace()
         self.ctrl.atomically(self.ctrl.schedule, self.t0)
         self.assertEqual(log, [True])
+
+
+
+
+
+
+
 
     d(a)
     def testNotifyOnChange(self):
@@ -567,51 +596,6 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
         self.ctrl.cancel(self.t2)
         self.ctrl.writes.clear()
-
-
-
-
-
-    d(a)
-    def testNestedRule(self):
-        def rule1():
-            self.assertEqual(self.ctrl.last_listener, self.t1)
-            self.assertEqual(self.ctrl.current_listener, self.t1)
-            self.ctrl.used(self.s1)
-            self.ctrl.changed(self.s2)
-            self.assertEqual(self.ctrl.reads, {self.s1:1})
-            self.assertEqual(self.ctrl.writes, {self.s2:1})
-            self.runAs(self.t2, rule2)
-            self.assertEqual(self.ctrl.last_listener, self.t1)
-            self.assertEqual(self.ctrl.current_listener, self.t1)
-            self.assertEqual(self.ctrl.reads, {self.s1:1})
-            self.assertEqual(self.ctrl.writes, {self.s2:1, s3:1})
-
-        def rule2():
-            self.assertEqual(self.ctrl.last_listener, self.t1)
-            self.assertEqual(self.ctrl.current_listener, self.t2)
-            self.assertEqual(self.ctrl.reads, {})
-            self.assertEqual(self.ctrl.writes, {self.s2:1})
-            self.ctrl.used(self.s2)
-            self.ctrl.changed(s3)
-
-        def rule0():
-            pass
-
-        s3 = TestSubject()
-        self.runAs(self.t0, rule0)
-        self.runAs(self.t1, rule1)
-        self.assertEqual(self.ctrl.has_run,
-            {self.t1:self.t1, self.t2:self.t1, self.t0: self.t0}
-        )
-        self.assertEqual(list(self.t1.iter_subjects()), [self.s1])
-        self.assertEqual(list(self.t2.iter_subjects()), [self.s2])
-        self.ctrl.rollback_to(self.ctrl.last_save)  # should undo both t1/t2
-        self.assertEqual(self.ctrl.last_listener, self.t0)
-
-
-
-
 
     def testCommitCanLoop(self):
         log=[]
@@ -643,12 +627,42 @@ class TestController(unittest.TestCase):
 
 
 
+    d(a)
+    def testNestedRule(self):
+        def rule1():
+            self.assertEqual(self.ctrl.last_listener, self.t1)
+            self.assertEqual(self.ctrl.current_listener, self.t1)
+            self.ctrl.used(self.s1)
+            self.ctrl.changed(self.s2)
+            self.assertEqual(self.ctrl.reads, {self.s1:1})
+            self.assertEqual(self.ctrl.writes, {self.s2:self.t1})
+            self.runAs(self.t2, rule2, False)
+            self.assertEqual(self.ctrl.last_listener, self.t1)
+            self.assertEqual(self.ctrl.current_listener, self.t1)
+            self.assertEqual(self.ctrl.reads, {self.s1:1})
+            self.assertEqual(self.ctrl.writes, {self.s2:self.t1, s3:self.t2})
 
+        def rule2():
+            self.assertEqual(self.ctrl.last_listener, self.t1)
+            self.assertEqual(self.ctrl.current_listener, self.t2)
+            self.assertEqual(self.ctrl.reads, {})
+            self.assertEqual(self.ctrl.writes, {self.s2:self.t1})
+            self.ctrl.used(self.s2)
+            self.ctrl.changed(s3)
 
+        def rule0():
+            pass
 
-
-
-
+        s3 = TestSubject(); s3.name = 's3'
+        self.runAs(self.t0, rule0)
+        self.runAs(self.t1, rule1)
+        self.assertEqual(self.ctrl.has_run,
+            {self.t1:self.t1, self.t0: self.t0}  # t2 was new, so doesn't show
+        )
+        self.assertEqual(list(self.t1.iter_subjects()), [self.s1])
+        self.assertEqual(list(self.t2.iter_subjects()), [self.s2])
+        self.ctrl.rollback_to(self.ctrl.last_save)  # should undo both t1/t2
+        self.assertEqual(self.ctrl.last_listener, self.t0)
 
 
 
@@ -657,20 +671,23 @@ class TestController(unittest.TestCase):
 class TestCells(mocker.MockerTestCase):
 
     ctrl = stm.ctrl
+    def tearDown(self):
+        # make sure the old controller is back
+        trellis.install_controller(self.ctrl)
 
     def testValueBasics(self):
-        self.failUnless(issubclass(stm.Value, stm.AbstractCell))
-        self.failUnless(issubclass(stm.Value, stm.AbstractSubject))
-        v = stm.Value()
+        self.failUnless(issubclass(trellis.Value, trellis.AbstractCell))
+        self.failUnless(issubclass(trellis.Value, stm.AbstractSubject))
+        v = trellis.Value()
         self.assertEqual(v.value, None)
-        self.assertEqual(v._set_by, stm._sentinel)
-        self.assertEqual(v._reset, stm._sentinel)
+        self.assertEqual(v._set_by, trellis._sentinel)
+        self.assertEqual(v._reset, trellis._sentinel)
         v.value = 21
-        self.assertEqual(v._set_by, stm._sentinel)
+        self.assertEqual(v._set_by, trellis._sentinel)
 
     d(a)
     def testValueUndo(self):
-        v = stm.Value(42)
+        v = trellis.Value(42)
         self.assertEqual(v.value, 42)
         sp = self.ctrl.savepoint()
         v.value = 43
@@ -680,33 +697,41 @@ class TestCells(mocker.MockerTestCase):
 
     d(a)
     def testValueUsed(self):
-        v = stm.Value(42)
+        v = trellis.Value(42)
         ctrl = self.mocker.replace(self.ctrl) #'peak.events.stm.ctrl')
         ctrl.used(v)
         self.mocker.replay()
+        trellis.install_controller(ctrl)
         self.assertEqual(v.value, 42)
 
+    def testDiscrete(self):
+        v = trellis.Value(None, True)
+        v.value = 42
+        self.assertEqual(v.value, None)
+
     def testValueChanged(self):
-        v = stm.Value(42)
-        ctrl = self.mocker.replace(self.ctrl)
+        v = trellis.Value(42)
+        old_ctrl, ctrl = self.ctrl, self.mocker.replace(self.ctrl)
         ctrl.lock(v)
         ctrl.changed(v)
         self.mocker.replay()
+        trellis.install_controller(ctrl)
         v.value = 43
         self.assertEqual(v.value, 43)
 
     def testValueUnchanged(self):
-        v = stm.Value(42)
+        v = trellis.Value(42)
         ctrl = self.mocker.replace(self.ctrl)
         ctrl.lock(v)
         mocker.expect(ctrl.changed(v)).count(0)
         self.mocker.replay()
+        trellis.install_controller(ctrl)
         v.value = 42
         self.assertEqual(v.value, 42)
 
     d(a)
     def testValueSetLock(self):
-        v = stm.Value(42)
+        v = trellis.Value(42)
         v.value = 43
         self.assertEqual(v.value, 43)
         self.assertEqual(v._set_by, None)
@@ -714,32 +739,21 @@ class TestCells(mocker.MockerTestCase):
             v.value = 99
         t = TestListener(); t.name = 't'
         t.run = go
-        self.assertRaises(stm.InputConflict, self.ctrl.run, t)
+        self.assertRaises(trellis.InputConflict, self.ctrl.run_rule, t)
         self.assertEqual(v.value, 43)
         def go():
             v.value = 43
         t = TestListener(); t.name = 't'
         t.run = go
-        self.ctrl.run(t)
+        self.ctrl.run_rule(t)
         self.assertEqual(v.value, 43)
-
-    def testDiscrete(self):
-        v = stm.Value(None, True)
-        v.value = 42
-        self.assertEqual(v.value, None)
-
-
-
-
-
-
 
 
 
     def testReadOnlyCellBasics(self):
         log = []
-        c = stm.Cell(lambda:log.append(1))
-        self.failUnless(type(c) is stm.ReadOnlyCell)
+        c = trellis.Cell(lambda:log.append(1))
+        self.failUnless(type(c) is trellis.ReadOnlyCell)
         c.value
         self.assertEqual(log,[1])
         c.value
@@ -747,8 +761,8 @@ class TestCells(mocker.MockerTestCase):
 
     def testDiscreteValue(self):
         log = []
-        v = stm.Value(False, True)
-        c = stm.Cell(lambda: log.append(v.value))
+        v = trellis.Value(False, True)
+        c = trellis.Cell(lambda: log.append(v.value))
         self.assertEqual(log,[])
         c.value
         self.assertEqual(log,[False])
@@ -761,15 +775,15 @@ class TestCells(mocker.MockerTestCase):
         self.assertEqual(log, [])
 
     def testCellConstructor(self):
-        self.failUnless(type(stm.Cell(value=42)) is stm.Value)
-        self.failUnless(type(stm.Cell(lambda:42)) is stm.ReadOnlyCell)
-        self.failUnless(type(stm.Cell(lambda:42, value=42)) is stm.Cell)
+        self.failUnless(type(trellis.Cell(value=42)) is trellis.Value)
+        self.failUnless(type(trellis.Cell(lambda:42)) is trellis.ReadOnlyCell)
+        self.failUnless(type(trellis.Cell(lambda:42, value=42)) is trellis.Cell)
 
     def testRuleChain(self):
-        v = stm.Value(0)
+        v = trellis.Value(0)
         log = []
-        c1 = stm.Cell(lambda:int(v.value/2))
-        c2 = stm.Cell(lambda:log.append(c1.value))
+        c1 = trellis.Cell(lambda:int(v.value/2))
+        c2 = trellis.Cell(lambda:log.append(c1.value))
         c2.value
         self.assertEqual(log, [0])
         v.value = 1
@@ -779,7 +793,7 @@ class TestCells(mocker.MockerTestCase):
 
     def testConstant(self):
         for v in (42, [57], "blah"):
-            c = stm.Constant(v)
+            c = trellis.Constant(v)
             self.assertEqual(c.value, v)
             self.assertEqual(c.get_value(), v)
             self.failIf(hasattr(c,'set_value'))
@@ -791,50 +805,169 @@ class TestCells(mocker.MockerTestCase):
         def go():
             log.append(1)
             return 42
-        c = stm.Cell(go)
+        c = trellis.Cell(go)
         self.assertEqual(c.value, 42)
         self.assertEqual(log, [1])
-        self.failUnless(isinstance(c, stm.ConstantRule))
+        self.failUnless(isinstance(c, trellis.ConstantRule))
         self.assertEqual(repr(c), "Constant(42)")
         self.assertEqual(c.value, 42)
         self.assertEqual(c.get_value(), 42)
         self.assertEqual(c.rule, None)
         self.assertEqual(log, [1])
         self.failIf(c.dirty())
-        c.__class__ = stm.ReadOnlyCell  # transition must be reversible to undo
-        self.failIf(isinstance(c, stm.ConstantRule))
+        c.__class__ = trellis.ReadOnlyCell  # transition must be reversible to undo
+        self.failIf(isinstance(c, trellis.ConstantRule))
+
+    def testModifierIsAtomic(self):
+        log = []
+        d(trellis.modifier)
+        def do_it():
+            self.failUnless(self.ctrl.active)
+            self.assertEqual(self.ctrl.current_listener, None)
+            log.append(True)
+            return log
+        rv = do_it()
+        self.failUnless(rv is log)
+        self.assertEqual(log, [True])
 
 
 
+    d(a)
+    def testModifierAlreadyAtomic(self):
+        log = []
+        d(trellis.modifier)
+        def do_it():
+            self.failUnless(self.ctrl.active)
+            self.assertEqual(self.ctrl.current_listener, None)
+            log.append(True)
+            return log
+        rv = do_it()
+        self.failUnless(rv is log)
+        self.assertEqual(log, [True])
 
-
-
-
-
-
-
-
-
-
-
+    d(a)
+    def testModifierFromCell(self):
+        v1, v2 = trellis.Value(42), trellis.Value(99)
+        d(trellis.modifier)
+        def do_it():
+            v1.value = v1.value * 2
+            self.assertEqual(self.ctrl.reads, {v1:1})
+        def rule():
+            v2.value
+            do_it()
+            self.assertEqual(self.ctrl.reads, {v2:1})
+        trellis.Cell(rule).value
+        self.assertEqual(v1.value, 84)
 
     def testDiscreteToConstant(self):
         log = []
-        c1 = stm.ReadOnlyCell(lambda:True, False, True)
-        c2 = stm.Cell(lambda:log.append(c1.value))
+        c1 = trellis.ReadOnlyCell(lambda:True, False, True)
+        c2 = trellis.Cell(lambda:log.append(c1.value))
         c2.value
         self.assertEqual(log, [True, False])
-        self.failUnless(isinstance(c1, stm.ConstantRule))
+        self.failUnless(isinstance(c1, trellis.ConstantRule))
+
+
+
+
+
+
 
     def testReadWriteCells(self):
-        C = stm.Cell(lambda: (F.value-32) * 5.0/9, -40)
-        F = stm.Cell(lambda: (C.value * 9.0)/5 + 32, -40)
+        C = trellis.Cell(lambda: (F.value-32) * 5.0/9, -40)
+        F = trellis.Cell(lambda: (C.value * 9.0)/5 + 32, -40)
         self.assertEqual(C.value, -40)
         self.assertEqual(F.value, -40)
         C.value = 0
         self.assertEqual(C.value, 0)
         self.assertEqual(F.value, 32)
 
+    def testSelfDependencyDoesNotIncreaseLayer(self):
+        c1 = trellis.Value(23)
+        c2 = trellis.Cell(lambda: c1.value + c2.value, 0)
+        self.assertEqual(c2.value, 23)
+        self.assertEqual(c2.layer, 1)
+        c1.value = 19
+        self.assertEqual(c2.value, 42)
+        self.assertEqual(c2.layer, 1)
+
+    def testSettingOccursForEqualObjects(self):
+        d1 = {}; d2 = {}
+        c1 = trellis.Value()
+        c1.value = d1
+        self.failUnless(c1.value is d1)
+        c1.value = d2
+        self.failUnless(c1.value is d2)
+
+    def testRepeat(self):
+        def counter():
+            if counter.value == 10:
+                return counter.value
+            trellis.repeat()
+            return counter.value + 1
+        counter = trellis.ReadOnlyCell(counter, 1)
+        self.assertEqual(counter.value, 10)
+
+
+
+
+
+
+
+class TestDefaultEventLoop(unittest.TestCase):
+
+    def setUp(self):
+        self.loop = EventLoop()
+        self.ctrl = trellis.ctrl
+    
+    def testCallAndPoll(self):
+        log = []
+        self.loop.call(log.append, 1)
+        self.loop.call(log.append, 2)
+        self.assertEqual(log, [])
+        self.loop.poll()
+        self.assertEqual(log, [1])
+        self.loop.poll()
+        self.assertEqual(log, [1, 2])
+        self.loop.poll()
+        self.assertEqual(log, [1, 2])
+
+    d(a)
+    def testLoopIsNonAtomic(self):
+        self.assertRaises(AssertionError, self.loop.poll)
+        self.assertRaises(AssertionError, self.loop.flush)
+        self.assertRaises(AssertionError, self.loop.run)
+
+    def testCallAndFlush(self):
+        log = []
+        self.loop.call(log.append, 1)
+        self.loop.call(log.append, 2)
+        self.loop.call(self.loop.call, log.append, 3)
+        self.assertEqual(log, [])
+        self.loop.flush()
+        self.assertEqual(log, [1, 2])
+        self.loop.poll()
+        self.assertEqual(log, [1, 2, 3])
+        self.loop.poll()
+        self.assertEqual(log, [1, 2, 3])
+
+
+
+
+
+    def testUndoOfCall(self):
+        log = []
+        def do():
+            self.loop.call(log.append, 1)
+            sp = self.ctrl.savepoint()
+            self.loop.call(log.append, 2)
+            self.ctrl.rollback_to(sp)
+            self.loop.call(log.append, 3)
+        self.ctrl.atomically(do)
+        self.assertEqual(log, [])
+        self.loop.flush()
+        self.assertEqual(log, [1, 3])
+        
 
 
 
@@ -846,6 +979,174 @@ class TestCells(mocker.MockerTestCase):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class TestTasks(unittest.TestCase):
+
+    ctrl = trellis.ctrl
+
+    def testRunAtomicallyInLoop(self):
+        log = []
+        def f():
+            self.failUnless(self.ctrl.active)
+            log.append(1)
+            yield trellis.Pause
+            self.failUnless(self.ctrl.active)
+            log.append(2)
+        t = trellis.TaskCell(f)
+        self.assertEqual(log, [])
+        t._loop.flush()
+        self.assertEqual(log, [1])
+        t._loop.flush()
+        self.assertEqual(log, [1, 2])
+
+    def testDependencyAndCallback(self):
+        log = []
+        v = trellis.Value(42)
+        v1 = trellis.Value(1)
+        c1 = trellis.Cell(lambda: v1.value*2)
+        def f():
+            while v.value:
+                log.append(v.value)
+                v1.value = v.value
+                yield trellis.Pause
+        t = trellis.TaskCell(f)
+        check = []
+        for j in 42, 57, 99, 106, 23, None:
+            self.assertEqual(log, check)
+            v.value = j
+            if j: check.append(j)
+            for i in range(5):
+                t._loop.flush()
+                if j: self.assertEqual(c1.value, j*2)
+                self.assertEqual(log, check)
+        
+
+    def testPauseAndCall(self):
+        log = []
+        class TaskExample(trellis.Component):
+            trellis.values(
+                start = False,
+                stop = False
+            )
+        
+            def wait_for_start(self):
+                log.append("waiting to start")
+                while not self.start:
+                    yield trellis.Pause
+        
+            def wait_for_stop(self):
+                while not self.stop:
+                    log.append("waiting to stop")
+                    yield trellis.Pause
+        
+            d(trellis.task)
+            def demo(self):
+                yield self.wait_for_start()
+                log.append("starting")
+                yield self.wait_for_stop()
+                log.append("stopped")
+        
+        self.assertEqual(log, [])
+        t = TaskExample()
+        EventLoop.flush()
+        self.assertEqual(log, ['waiting to start'])
+        log.pop()
+        t.start = True
+        EventLoop.flush()
+        self.assertEqual(log, ['starting', 'waiting to stop'])
+        log.pop()
+        log.pop()
+        t.stop = True
+        EventLoop.flush()
+        self.assertEqual(log, ['stopped'])
+
+
+
+    def testValueReturns(self):
+        log = []
+        def f1():
+            yield 42
+        def f2():
+            yield f1(); yield trellis.resume()
+        def f3():
+            yield f2(); v = trellis.resume()
+            log.append(v)
+
+        t = trellis.TaskCell(f3)
+        EventLoop.flush()
+        self.assertEqual(log, [42])
+
+        log = []
+        def f1():
+            yield trellis.Return(42)
+
+        t = trellis.TaskCell(f3)
+        EventLoop.flush()
+        self.assertEqual(log, [42])
+
+
+    def testErrorPropagation(self):
+        log = []
+        def f1():
+            raise DummyError
+        def f2():
+            try:
+                yield f1(); trellis.resume()
+            except DummyError:
+                log.append(True)
+            else:
+                pass
+            
+        t = trellis.TaskCell(f2)
+        self.assertEqual(log, [])
+        EventLoop.flush()
+        self.assertEqual(log, [True])
+
+        
+    def testSendAndThrow(self):
+        log = []
+        class SendThrowIter(object):
+            count = 0
+            def next(self):
+                if self.count==0:
+                    self.count = 1
+                    def f(): yield 99
+                    return f()
+                raise StopIteration
+
+            def send(self, value):
+                log.append(value)
+                def f(): raise DummyError; yield None
+                return f()                    
+
+            def throw(self, typ, val, tb):
+                log.append(typ)
+                log.append(type(val))
+                log.append(type(tb))
+                raise StopIteration                
+
+        def fs(): yield SendThrowIter()
+        t = trellis.TaskCell(fs)
+        self.assertEqual(log, [])
+        EventLoop.flush()
+        self.assertEqual(log, [99, DummyError,DummyError, types.TracebackType])
+        
 
 
 

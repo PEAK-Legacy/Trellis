@@ -1,6 +1,6 @@
 from peak import context
 from peak.events import trellis
-from peak.util import addons
+from peak.util import addons, decorators
 from peak.util.extremes import Min, Max
 import heapq, weakref, time
 
@@ -126,73 +126,23 @@ class EventLoop(trellis.Component, context.Service):
 
     trellis.values(
         running = False,
-        stop_requested = False
+        stop_requested = False, _call_queue = None
     )
     trellis.rules(
-        _call_queue = lambda self: []
+        _call_queue = lambda self: [],
+        _next_time = lambda self: Time.next_event_time(True),
     )
+    _callback_active = False
 
     def run(self):
         """Loop updating the time and invoking requested calls"""
         assert not self.running, "EventLoop is already running"
-        queue = self._call_queue
+        assert not trellis.ctrl.active, "Event loop can't be run atomically"
+        trellis.atomically(self._setup)
         self.stop_requested = False
         self.running = True
-        get_delay = Time.next_event_time
         try:
-            while (queue or get_delay(True)) and not self.stop_requested:
-                if queue:
-                    f, args, kw = queue.pop(0)
-                    f(*args, **kw)
-                if not queue:
-                    if Time.auto_update:
-                        Time.tick()                                        
-                    else:
-                        Time.advance(get_delay(True) or 0)
-        finally:
-            self.running = False; self.stop_requested = False
-            
-    def stop(self):
-        """Stop the event loop at the next opportunity"""
-        assert self.running, "EventLoop isn't running"
-        self.stop_requested = True
-
-    def call(self, func, *args, **kw):
-        """Call `func(*args, **kw)` at the next opportunity"""
-        self._call_queue.append((func, args, kw))
-
-
-class TwistedEventLoop(EventLoop):
-    """Twisted version of the event loop"""
-
-    context.replaces(EventLoop)    
-    reactor = _delayed_call = None
-
-    trellis.rules(
-        _next_time = lambda self: Time.next_event_time(True)
-    )
-
-    def _ticker(self):
-        if Time.auto_update and self.running:
-            if self._next_time is not None:
-                if self._delayed_call and self._delayed_call.active():
-                    self._delayed_call.reset(self._next_time)
-                else:
-                    self._delayed_call = self.reactor.callLater(
-                        self._next_time, Time.tick
-                    )
-    _ticker = trellis.rule(_ticker)
-
-    def run(self):
-        """Loop updating the time and invoking requested calls"""
-        assert not self.running, "EventLoop is already running"
-        if self.reactor is None:
-            self.setup_reactor()
-        self.stop_requested = False
-        Time.tick()
-        self.running = True
-        try:
-            self.reactor.run()
+            self._loop()
         finally:
             self.running = False
             self.stop_requested = False
@@ -201,41 +151,132 @@ class TwistedEventLoop(EventLoop):
         """Stop the event loop at the next opportunity"""
         assert self.running, "EventLoop isn't running"
         self.stop_requested = True
-        self.reactor.stop()
 
+    decorators.decorate(trellis.modifier)
     def call(self, func, *args, **kw):
         """Call `func(*args, **kw)` at the next opportunity"""
-        if not self._call_queue:
-            if self.reactor is None:
-                self.setup_reactor()
-                self.reactor.callLater(0, self._purge_queue)
         self._call_queue.append((func, args, kw))
+        self._setup()
+        trellis.on_undo(self._call_queue.pop)
+        self._callback_if_needed()
 
-    def _purge_queue(self):
-        # twisted doesn't guarantee sequential callbacks, but this does...
-        f, args, kw = self._call_queue.pop(0)
-        f(*args, **kw)
-        if self._call_queue:
-            self.reactor.callLater(0, self._purge_queue)
 
-    def setup_reactor(self):
+
+    def poll(self):
+        """Execute up to a single pending call"""
+        self.flush(1)
+
+    def flush(self, count=0):
+        """Execute the specified number of pending calls (0 for all)"""
+        assert not trellis.ctrl.active, "Event loop can't be run atomically"
+        queue = self._split_queue(count)
+        for (f, args, kw) in queue:
+            f(*args, **kw)
+        self._callback_if_needed()
+        if Time.auto_update:
+            Time.tick()                                        
+        else:
+            Time.advance(self._next_time or 0)
+
+    decorators.decorate(trellis.modifier)
+    def _callback_if_needed(self):
+        if self._call_queue and not self._callback_active:
+            self._arrange_callback(self._callback)
+            self._callback_active = True
+        
+    decorators.decorate(trellis.modifier)
+    def _split_queue(self, count):
+        queue = self._call_queue
+        count = count or len(queue)
+        if queue:
+            head, self._call_queue = queue[:count], queue[count:]
+            return head
+        return ()
+
+    def _callback(self):
+        self._callback_active = False
+        self.flush(1)
+
+
+
+
+
+
+
+    def _loop(self):
+        """Subclasses should invoke their external loop here"""
+        queue = self._call_queue
+        while (queue or self._next_time) and not self.stop_requested:
+            self.flush(1)
+
+    def _setup(self):
+        """Subclasses should import/setup their external loop here
+
+        Note: must be inherently thread-safe, or else use a cell attribute in
+        order to benefit from locking.  This method is called atomically, but
+        you should not log any undo actions."""
+
+    def _arrange_callback(self, func):
+        """Subclasses should register `func` to be called by external loop
+
+        Note: Must be safe to call this from a 'foreign' thread."""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class TwistedEventLoop(EventLoop):
+    """Twisted version of the event loop"""
+
+    context.replaces(EventLoop)    
+    reactor = _delayed_call = None
+
+    def _ticker(self):
+        if self.running:
+            if Time.auto_update:
+                if self._next_time is not None:
+                    if self._delayed_call and self._delayed_call.active():
+                        self._delayed_call.reset(self._next_time)
+                    else:
+                        self._delayed_call = self.reactor.callLater(
+                            self._next_time, Time.tick
+                        )
+            if self.stop_requested:
+                self.reactor.stop()
+
+    _ticker = trellis.observer(_ticker)
+
+    def _loop(self):
+        """Loop updating the time and invoking requested calls"""
+        Time.tick()
+        self.reactor.run()
+
+    def _arrange_callback(self, func):
+        self.reactor.callLater(0, func)
+
+    def _setup(self):
         if self.reactor is None:
             from twisted.internet import reactor
             self.reactor = reactor
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -253,77 +294,36 @@ class WXEventLoop(EventLoop):
     own risk.  :(
     """
     context.replaces(EventLoop)    
+    wx = None
 
-    wx = _call_queue = None
-    trellis.rules(
-        _next_time = lambda self: Time.next_event_time(True)
-    )
     def _ticker(self):
         if self.running:
             if Time.auto_update:
                 if self._next_time is not None:
                     self.wx.FutureCall(self._next_time*1000, Time.tick)
-    _ticker = trellis.rule(_ticker)
+            if self.stop_requested:
+                self.wx.GetApp().ExitMainLoop()
+    _ticker = trellis.observer(_ticker)
 
-    def run(self):
+    def _loop(self):
         """Loop updating the time and invoking requested calls"""
-        assert not self.running, "EventLoop is already running"
-        if not self.wx:
-            import wx
-            self.wx = wx
         app = self.wx.GetApp()
         assert app is not None, "wx.App not created"
-        self.running = True
-        try:
-            while not self.stop_requested:
-                app.MainLoop()
-                if app.ExitOnFrameDelete:   # handle case where windows exist
-                    self.stop_requested = True
-                else:
-                    app.ProcessPendingEvents()  # ugh
-        finally:
-            self.running = False
-            self.stop_requested = False
+        while not self.stop_requested:
+            app.MainLoop()
+            if app.ExitOnFrameDelete:   # handle case where windows exist
+                self.stop_requested = True
+            else:
+                app.ProcessPendingEvents()  # ugh
 
-    def stop(self):
-        """Stop the event loop at the next opportunity"""
-        assert self.running, "EventLoop isn't running"
-        self.stop_requested = True
-        self.wx.GetApp().ExitMainLoop()
-
-    def call(self, func, *args, **kw):
+    def _arrange_callback(self, func):
         """Call `func(*args, **kw)` at the next opportunity"""
+        self.wx.CallAfter(func)
+            
+    def _setup(self):
         if not self.wx:
             import wx
             self.wx = wx
-        self.wx.CallAfter(func, *args, **kw)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 class Time(trellis.Component, context.Service):
@@ -331,29 +331,20 @@ class Time(trellis.Component, context.Service):
 
     trellis.values(
         _tick = EPOCH._when,
-        auto_update = True
+        auto_update = True,
+        _schedule = None,
     )
     _now   = EPOCH._when
 
     trellis.rules(
-        _schedule  = lambda self: [Max],
-        _events    = lambda self: weakref.WeakValueDictionary(),
+        _schedule = lambda self: [Max],
+        _events = lambda self: weakref.WeakValueDictionary(),
     )
     def _updated(self):
-        if self._updated is None:
-            updated = set()
-        else:
-            # Always return the same object, so this rule NEVER changes value!
-            # This ensures that only the most-recently fired event rules recalc
-            updated = self._updated
-            updated.clear()
-
         while self._tick >= self._schedule[0]:
             key = heapq.heappop(self._schedule)
             if key in self._events:
-                updated.add(key)
-                self._events.pop(key).ensure_recalculation()
-        return updated
+                self._events.pop(key).value = True
 
     _updated = trellis.rule(_updated)   
 
@@ -362,10 +353,19 @@ class Time(trellis.Component, context.Service):
         if when not in self._events:
             if self._now >= when:
                 return True
-            heapq.heappush(self._schedule, when)
-            self._events[when] = e = \
-                trellis.Cell(lambda: e.value or when in self._updated, False)
+            if trellis.ctrl.current_listener is not None:
+                heapq.heappush(self._schedule, when)
+                trellis.ctrl.changed(self.__cells__['_schedule'])
+                self._events[when] = e = trellis.Value(False)
+            else:
+                return False
         return self._events[when].value
+
+
+
+
+
+
 
     def __getitem__(self, interval):
         """Return a timer that's the given offset from the current time"""
@@ -380,8 +380,9 @@ class Time(trellis.Component, context.Service):
         self._set(self.time())
 
     def _set(self, when):
-        self._now = when
+        trellis.change_attr(self, '_now', when)
         self._tick = when
+    _set = trellis.modifier(_set)
 
     def _tick(self):
         if self.auto_update:
@@ -389,7 +390,6 @@ class Time(trellis.Component, context.Service):
             trellis.poll()
             return tick
         return self._tick
-
     _tick = trellis.rule(_tick)
 
     def next_event_time(self, relative=False):

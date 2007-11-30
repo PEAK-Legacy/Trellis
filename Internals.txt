@@ -4,6 +4,7 @@ Cell Properties
 Cell properties are descriptors used to implement cell-based attributes.  They
 are created using a name::
 
+    >>> from peak.events import trellis, activity
     >>> from peak.events.trellis import Cell, CellProperty
 
     >>> CellProperty('C')
@@ -41,9 +42,9 @@ attribute of the corresponding cell in the object's ``__cells__`` dictionary::
 
     >>> tc = Converter()
     >>> tc.C
-    0
+    0.0
     >>> tc.F
-    32
+    32.0
 
     >>> tc.C = 100
     >>> tc.F
@@ -162,7 +163,7 @@ to default_factory::
     CellProperty('y')
 
     >>> default_factory(Test, Test(), 'y')
-    Cell(None, 42 [out-of-date])
+    Value(42)
 
     >>> t = Test()
     >>> t.__cells__ = {}
@@ -190,20 +191,20 @@ constructor::
     >>> CellRules(Test)['x'] = None
     >>> CellValues(Test)['x'] = NO_VALUE
     >>> default_factory(Test, Test(), 'x')
-    Cell(None, None [out-of-date])
+    Value(None)
 
 And it binds non-None rules to the instance::
 
     >>> CellRules(Test)['x'] = lambda self: 42
     >>> default_factory(Test, Test(), 'x')
-    ReadOnlyCell(<bound method Test.<lambda> of <Test object at...>>, None [out-of-date])
+    ReadOnlyCell(<bound method Test.<lambda> of <Test object at...>>, None [uninitialized])
 
 And uses the event flag from IsDiscrete::
 
     >>> CellRules(Test)['x'] = None
     >>> IsDiscrete(Test)['x'] = True
     >>> default_factory(Test, Test(), 'x')
-    Cell(None, None [out-of-date], discrete[None])
+    Value(None, discrete[None])
 
 The todo_factory only uses the rule to create the default value, and always
 creates a rule-free receiver, regardless of the value or receiver flag
@@ -217,7 +218,7 @@ settings::
     >>> Test.to_x = Test.x.future
 
     >>> todo_factory(Test, Test(), 'x')
-    Cell(None, {} [out-of-date], discrete[{}])
+    Value({}, discrete[{}])
 
 
 future, @modifier, etc.
@@ -264,17 +265,18 @@ task_factory
 The task_factory creates a TaskCell::
 
     >>> from peak.events.trellis import task_factory
-    >>> def f(self): yield 1
+    >>> def f(self): yield 1; print "done"
     >>> CellRules(Test)['x'] = f
     >>> CellValues(Test)['x'] = NO_VALUE
     >>> IsDiscrete(Test)['x'] = False
     >>> t = task_factory(Test, Test(), 'x')
     >>> t
-    TaskCell(<function step at...>, None [out-of-date])
-    >>> t.value
-    1
-    >>> t
-    CompletedTask(1)
+    TaskCell(None)
+    >>> print t.value
+    None
+    >>> activity.EventLoop.flush()  # yield 1
+    >>> activity.EventLoop.flush()  # 'print done'
+    done
 
 
 Decorators
@@ -353,7 +355,7 @@ Error messages::
     TypeError: @rule decorator must wrap a function directly
 
     >>> class Test:
-    ...     decorate(task, optional)
+    ...     decorate(trellis.task, trellis.optional)
     ...     def wrong(): pass
     Traceback (most recent call last):
       ...
@@ -543,68 +545,21 @@ Repeating, Polling, Recalc
       ...
     RuntimeError: repeat() must be called from a rule
 
-    >>> c = Cell(lambda:42)
-    >>> c.value
-    42
-    >>> c.ensure_recalculation()
-    Traceback (most recent call last):
-      ...
-    TypeError: Can't recalculate a cell without a rule
-
-    >>> c = Cell(value=99)
-    >>> c.ensure_recalculation()
-    Traceback (most recent call last):
-      ...
-    TypeError: Can't recalculate a cell without a rule
-
-
-    >>> def hello(): print "c =", c.value
-    >>> c1 = Cell(hello)
-    >>> c2 = Cell(value=99)
-    >>> c2.value
-    99
-
-    >>> Cell(c1.ensure_recalculation).value
-    c = 99
-
-    >>> c.value = 42
-    c = 42
-
-    >>> c2.value = 76
-    >>> c1.ensure_recalculation()
-    >>> Cell().value
-    c = 42
-
-    >>> c2.value = 69
-    >>> c1.ensure_recalculation()
-    >>> Cell().value
-    c = 42
-
-    >>> c1.value
-    >>> c1.ensure_recalculation()
-    Traceback (most recent call last):
-      ...
-    RuntimeError: Already recalculated
-
-    >>> c2.value = 1    # already calculated, no effect
-
-    >>> c1.ensure_recalculation()
-    >>> Cell().value
-    c = 42
 
 "Poll" re-invokes a rule on the next recalc of *anything*::
 
-    >>> c2.value = 21
-    >>> c1.ensure_recalculation()
-
+    >>> c2 = Cell(value=99)
     >>> def count():
     ...     if poll(): print "calculating"
     ...     return c.value+1
 
     >>> c = Cell(count, 0)
+
+    >>> def hello(): print "c =", c.value
+    >>> c1 = ObserverCell(hello)
+    c = calculating
+    1
     >>> c.value
-    calculating
-    c = 1
     1
     >>> c.value
     1
@@ -644,14 +599,12 @@ And now the repeated polling of the now-vanished cell stops::
 Discrete Processing
 -------------------
 
-    >>> from peak.events import trellis
-
-    >>> class LineReceiver(Component):
-    ...     bytes = receiver('')
-    ...     delimiter = value('\r\n')
+    >>> class LineReceiver(trellis.Component):
+    ...     bytes = trellis.receiver('')
+    ...     delimiter = trellis.value('\r\n')
     ...     _buffer = ''
     ...
-    ...     decorate(discrete)
+    ...     decorate(trellis.discrete)
     ...     def line(self):
     ...         buffer = self._buffer = self._buffer + self.bytes
     ...         lines = buffer.split(self.delimiter, 1)
@@ -704,7 +657,7 @@ Multitasking
       ...
     Exception: foo
 
-    >>> resume()
+    >>> trellis.resume()
     Traceback (most recent call last):
       ...
     RuntimeError: resume() must be called from a @trellis.task
@@ -712,7 +665,7 @@ Multitasking
     >>> def yielder(ob):
     ...     while not ob.bytes:
     ...         print "pausing"
-    ...         yield Pause
+    ...         yield trellis.Pause
     ...     yield ob.bytes
 
     >>> def t():
@@ -720,63 +673,11 @@ Multitasking
     ...     yield 2
     ...     while 1:
     ...         yield yielder(lp);
-    ...         print "Got:", resume()
-    ...         yield Pause     # nothing changes unless we pause
+    ...         print "Got:", trellis.resume()
+    ...         yield trellis.Pause     # nothing changes unless we pause
 
-    >>> c = TaskCell(t)
-    >>> c.value
-    pausing
-    2
-    >>> c.value
-    2
+    >>> c = trellis.TaskCell(t)
 
-    >>> lp.bytes = 'xyz'
-    Got: xyz
-    pausing
-
-    >>> lp.bytes = 'abc'
-    Got: abc
-    pausing
-
-    >>> def t():
-    ...     yield 1
-    ...     yield 2
-    ...     yield yielder(lp)
-    ...     yield raiser()
-
-    >>> c = TaskCell(t)
-    >>> c.value
-    pausing
-    2
-    >>> c.value
-    2
-    >>> lp.bytes = 'xyz'
-    Traceback (most recent call last):
-      ...
-    Exception: foo
-
-    >>> c.value
-    2
-
-    >>> y = yielder(lp)
-    >>> def t():
-    ...     yield Return(y)
-    >>> TaskCell(t).value is y
-    True
-
-    >>> del lp.__cells__    # break reference cycles before globals are cleared
-
-    >>> c = Cell(value=1)
-    >>> c.value = 1
-
-    >>> def t():
-    ...     c.value = 2
-    ...     c.value = 3
-    ...     yield 4
-    >>> TaskCell(t).value
-    Traceback (most recent call last):
-      ...
-    InputConflict: (2, 3)
 
 Dictionaries
 ------------
@@ -813,7 +714,7 @@ Dictionaries
     ...     for name in 'added', 'changed', 'deleted':
     ...         if getattr(d,name):
     ...             print name, '=', getattr(d,name)
-    >>> dump = Cell(dump)
+    >>> dump = ObserverCell(dump)
     >>> dump.value
 
     >>> d[2] = 3
@@ -874,7 +775,7 @@ Lists
     >>> def dump():
     ...     if L.changed:
     ...         print "changed to", L
-    >>> dump = Cell(dump)
+    >>> dump = ObserverCell(dump)
     >>> dump.value
 
     >>> hash(L)
@@ -958,7 +859,7 @@ Sets
     ...     for name in 'added', 'removed':
     ...         if getattr(s, name):
     ...             print name, '=', list(getattr(s,name))
-    >>> dump = Cell(dump)
+    >>> dump = ObserverCell(dump)
     >>> dump.value
 
     >>> s.clear()
@@ -1036,75 +937,23 @@ And if the setting occurs in a modifier or action rule, the rule's execution
 should be deferred until the current calculation/rule is complete, thereby
 allowing several cells to be simultaneously pre-set and initialized at once::
 
-    >>> c = Cell(aRule, 96)
+    >>> c = trellis.Cell(aRule, 96)
     >>> def go():
     ...     c.value = 27
     ...     print "finished setting"
-    >>> modifier(go)()
+    >>> trellis.modifier(go)()
     finished setting
     running 27
     >>> c.value
     27
 
-Component __init__ code always runs as though it were inside an @action or
-@modifier, so that all attributes are initialized "simultaneously".
-
-    >>> class Dummy(trellis.Component):
-    ...     def __init__(self):
-    ...         c.value = 1  # this sets the value as of the *previous* pulse
-    ...         c.value = 2  # this one sets the value for *this* pulse
-
-    >>> Dummy()
-    Traceback (most recent call last):
-      ...
-    InputConflict: (1, 2)
-
-
-
-Cell and Component Initialization
----------------------------------
-
-Same tests as above, but with stm.Cell objects:
-
->>> from peak.events import stm
-
-This bit tests whether a rule gets to fire when a cell's value is initialized.
-When you set a ruled cell's value before computing its value, the "old" value
-should be the passed-in value, and the "new" value should be the assigned
-value (overriding the rule)::
-
-    >>> def aRule():
-    ...     print "running", c.value
-    ...     return 42
-
-    >>> c = stm.Cell(aRule, 96)
-    >>> c.value = 27
-    running 27
-    >>> c.value
-    27
-
-And if the setting occurs in a modifier or action rule, the rule's execution
-should be deferred until the current calculation/rule is complete, thereby
-allowing several cells to be simultaneously pre-set and initialized at once::
-
-    >>> c = stm.Cell(aRule, 96)
-    >>> def go():
-    ...     c.value = 27
-    ...     print "finished setting", c.value
-
-    >>> stm.ctrl.atomically(go)
-    finished setting 27
-    running 27
-
-    >>> c.value
-    27
 
 Observers::
 
-    >>> v = stm.Value(26)
+    >>> v = trellis.Value(26)
     >>> def o():
     ...     print "value is", v.value
-    >>> o = stm.Observer(o)
+    >>> o = trellis.ObserverCell(o)
     value is 26
     >>> v.value = 27
     value is 27
@@ -1115,7 +964,7 @@ Observers::
     >>> def fail():
     ...     v.value = 99
 
-    >>> stm.Observer(fail)
+    >>> trellis.ObserverCell(fail)
     Traceback (most recent call last):
       ...
     RuntimeError: Can't change objects during commit phase
@@ -1139,11 +988,11 @@ B has changed before it is allowed to be recalculated::
     >>> def recalc(name):
     ...     print "calculating", name
 
-    >>> X = stm.Cell(value=1)
-    >>> A = stm.Cell(lambda: recalc("A") or (X.value, C.value))
-    >>> B = stm.Cell(lambda: recalc("B") or  X.value)
-    >>> C = stm.Cell(lambda: recalc("C") or (B.value, X.value))
-    >>> H = stm.Cell(lambda: recalc("H") or (X.value, C.value))
+    >>> X = trellis.Cell(value=1)
+    >>> A = trellis.Cell(lambda: recalc("A") or (X.value, C.value))
+    >>> B = trellis.Cell(lambda: recalc("B") or  X.value)
+    >>> C = trellis.Cell(lambda: recalc("C") or (B.value, X.value))
+    >>> H = trellis.Cell(lambda: recalc("H") or (X.value, C.value))
 
 We'll calculate H first, so it will be X's first listener::
 
@@ -1192,8 +1041,7 @@ If this had been a shoddy algorithm, then ``H.value`` would have been
 by the way that B is calculated before C, because C depends on B as its first
 dependency.  So it has to look "up" the dependency graph to see if B or X have
 changed before C's rule can be run.  Since B is first in C's dependency order,
-it gets recalculated first.  Had X been first in C's dependency order instead,
-the displayed calculation order would have been H, C, B, A.
+it gets recalculated first.
 
 (Similarly, H gets recalculated before C, because its first dependency is X,
 so it immediately realizes it needs to recalculate.  X also notifies H first

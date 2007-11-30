@@ -25,7 +25,7 @@ of the list interface, you can implement a changelog-based structure.  For
 example, the Trellis package includes a ``SortedSet`` type that maintains an
 index of items sorted by keys, with a cell that lists changed regions.
 
-A ``trellis.SortedSet`` is a specialized component that lets you wrap a
+A ``collections.SortedSet`` is a specialized component that lets you wrap a
 ``trellis.Set`` (or anything similar to one, that offers iteration plus
 ``added`` and ``removed`` cells) with a sort key, to get a list::
 
@@ -35,7 +35,7 @@ A ``trellis.SortedSet`` is a specialized component that lets you wrap a
     >>> class Viewer(trellis.Component):
     ...     trellis.values(model = None)
     ...
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def view_it(self):
     ...         if self.model is not None:
     ...             print self.model
@@ -65,7 +65,7 @@ becomes empty again::
     >>> view.model = None   # quiet, please
 
     >>> class Watcher(trellis.Component):
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def dump(self):
     ...         print myIndex.changes
 
@@ -252,8 +252,7 @@ some trellis-ized data structure::
 
     >>> def show():
     ...     print "Changes:", o.changes
-    >>> c = trellis.ActionCell(show)
-    >>> c.value
+    >>> c = trellis.ObserverCell(show)
     Changes: {}
 
 The ``changes`` attribute is a dictionary (a regular dictionary, not a

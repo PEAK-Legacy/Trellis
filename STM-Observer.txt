@@ -336,14 +336,14 @@ being set::
     >>> s1.foo = 'bar'
 
     >>> def setattr_normally():
-    ...     hist.setattr(s1, 'foo', "baz")
+    ...     hist.change_attr(s1, 'foo', "baz")
 
     >>> hist.atomically(setattr_normally)
     >>> s1.foo
     'baz'
 
     >>> def setattr_rollback():
-    ...     hist.setattr(s1, 'foo', "spam")
+    ...     hist.change_attr(s1, 'foo', "spam")
     ...     raise TypeError
 
     >>> hist.atomically(setattr_rollback)

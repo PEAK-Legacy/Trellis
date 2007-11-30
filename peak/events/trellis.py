@@ -1,292 +1,371 @@
 from thread import get_ident
 from weakref import ref
 from peak.util import symbols, addons, decorators
-import sys, UserDict, UserList, sets
+import sys, UserDict, UserList, sets, stm
+from peak.util.extremes import Max
 
 __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
-    'discrete', 'repeat', 'poll', 'InputConflict', 'action', 'ActionCell',
+    'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
     'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Return', 'TaskCell',
-    'dirty',
+    'dirty', 'ctrl',
 ]
 
-_states = {}
 NO_VALUE = symbols.Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
-
-def _get_state():
-    try:
-        return _states[get_ident()]
-    except KeyError:
-        _Controller()
-        return _states[get_ident()]
-
-class _Controller:
-    def __init__(self):
-        _states.setdefault(get_ident(), [1, None, self])
-        now = self.now = []
-        later = self.later = []
-        self.notify = now.append
-        self.change = later.append
-        self.cell = Cell(current_pulse, 1)
-        self.action = DummyAction()
-
-class Mailbox(object):
-    __slots__ = '__weakref__', 'owner', 'dependencies'
-    def __init__(self, owner, *args):
-        self.owner = ref(owner)
-        self.dependencies = list(args)
-
-
-class ReadOnlyCell(object):
-    """Base class for all cell types, also a read-only cell"""
-    __slots__ = """
-        _state _listeners _mailbox _current_val _rule _reset _changed_as_of
-        _version __weakref__
-    """.split()
-    _writebuf = _sentinel
-    _can_freeze = True
-    _writable = _const_type = False
-    _is_action = False
-
-    def __init__(self, rule=None, value=None, discrete=False):
-        self._state = _get_state()
-        self._listeners = []
-        self._mailbox = Mailbox(self, None)
-        self._changed_as_of = self._version = None
-        self._current_val = value
-        self._rule = rule
-        self._reset = (_sentinel, value)[bool(discrete)]
-
-    def get_value(self):
-        """Get the value of this cell"""
-        pulse, observer, ctrl = state = self._state
-        if observer is None:
-            # XXX we should switch to current state here, if needed
-            if pulse is not self._version:
-                self._check_dirty(state)
-                _cleanup(state)
-            return self._current_val
-        elif observer is not self:
-            #if observer._state is not state:
-            #    raise RuntimeError("Can't access cells in another task/thread")
-            observer.observe(self)
-        if pulse is not self._version:
-            self._check_dirty(state)
-        return self._current_val
-
-    value = property(get_value)
-
-
-
-    def _check_dirty(self, state):
-        pulse, observer, ctrl = state
-        if pulse is self._version:
-            # We are already up to date, indicate whether we've changed
-            return pulse is self._changed_as_of
-        self._version = pulse   # Ensure circular rules terminate
-        state[1] = self    # we are the observer while calculating/comparing
-        try:
-            new = self._writebuf
-            have_new = False
-            if new is not _sentinel:
-                # We were assigned a value in the previous pulse
-                self._writebuf = _sentinel
-                have_new = True
-            if self._rule and (not have_new or self._changed_as_of==-1):
-                # We weren't assigned a value, see if we need to recalc
-                for d in self._mailbox.dependencies:
-                    if (not d or d._changed_as_of is pulse
-                         or d._version is not pulse and d._check_dirty(state)
-                    ):  # one of our dependencies changed, recalc
-                        self._mailbox = m = Mailbox(self)  # break old deps
-                        if self._changed_as_of==-1: self._rule(); dirty()
-                        else: new = self._rule()
-                        have_new = True
-                        if not m.dependencies and self._can_freeze:
-                            have_new = _sentinel    # flag for freezing
-                        break   
-            if have_new:
-                previous = self._current_val
-                if self._reset is not _sentinel and new is not self._reset:
-                    # discrete cells are always "changed" if new non-reset value
-                    previous = self._reset
-                    ctrl.change(self)  # make sure we have a chance to reset
-            elif self._reset is not _sentinel:
-                # discrete cells reset if there's no new value set or calc'd
-                new = self._reset
-                previous = self._current_val
-                have_new = (new != previous)
-            else:
-                # No new value and not discrete?  Then no change.
-                return False
-            # We have a new value, but has it actually changed?
-            if new is not previous and new != previous:
-    
-                # Yes, update our state and notify listeners
-                self._current_val = new
-                self._changed_as_of = pulse
-                notify = ctrl.notify
-    
-                for c in self._listeners:
-                    c = c()
-                    if c is not None:
-                        c = c.owner()
-                        if c is not None and c._version is not pulse:
-                            notify(c)
-                            
-            if have_new is _sentinel:
-                # We no longer have any dependencies, so turn Constant
-                self._mailbox = self._listeners = self._rule = None
-                self.__class__ = self._const_type or Constant
-    
-            return have_new
-
-        finally:
-            state[1] = observer # put back the old observer
-
-
-    def __repr__(self):
-        e = ('', ' [out-of-date]')[self._version is not _get_state()[0]]
-        e += ('', ', discrete[%r]'% self._reset)[self._reset is not _sentinel]
-        return "%s(%r, %r%s)" % (
-            self.__class__.__name__, self._rule, self._current_val, e
-        )
-
-    def observe(self, dep):
-        mailbox = self._mailbox
-        depends = mailbox.dependencies
-        listeners = dep._listeners
-        if dep not in depends: depends.append(dep)
-        r = ref(mailbox, listeners.remove)
-        if r not in listeners: listeners.append(r)
-
-    def ensure_recalculation(self):
-        """Ensure that this cell's rule will be (re)calculated"""
-        pulse, observer, ctrl = self._state
-
-        if observer is self:
-            # repeat()
-            self._mailbox.dependencies.insert(0, None)
-            ctrl.change(self)
-
-        elif self._rule is None:
-            raise TypeError("Can't recalculate a cell without a rule")
-
-        #elif observer and observer._state is not self._state:
-        #    raise RuntimeError("Can't access cells in another task/thread")
-
-        elif pulse is self._version:
-            raise RuntimeError("Already recalculated")
-
-        else:  
-            self._mailbox.dependencies.append(None)
-            ctrl.notify(self)
-
 
 class InputConflict(Exception):
     """Attempt to set a cell to two different values during the same pulse"""
 
 
-class ActionCell(ReadOnlyCell):
-    """Cell type for @action rules and @modifier functions"""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class AbstractCell(object):
+    """Base class for cells"""
     __slots__ = ()
-    _is_action = True
 
-    def get_value(self):
-        pulse, observer, ctrl = self._state
-        if observer is None:
-            return ReadOnlyCell.get_value(self)
-        raise RuntimeError("No rule may depend on the result of an action")
+    rule = value = _value = _needs_init = None
 
-    value = property(get_value)
-    def __init__(self, rule): ReadOnlyCell.__init__(self,rule,None,False)
-
-class Constant(ReadOnlyCell):
-    """An immutable cell that no longer depends on anything else"""
-    __slots__ = ()
-    value = ReadOnlyCell._current_val
     def get_value(self):
         """Get the value of this cell"""
         return self.value
-    
-    _can_freeze = False
-    _mailbox = None
-    def __init__(self, value):
-        ReadOnlyCell._current_val.__set__(self, value)
-        #ReadOnlyCell._state.__set__(self, _get_state())
+
+    def __repr__(self):
+        rule = reset = ni = ''
+        if getattr(self, 'rule', None) is not None:
+            rule = repr(self.rule)+', '
+        if self._needs_init:
+            ni = ' [uninitialized]'
+        if getattr(self, '_reset', _sentinel) is not _sentinel:
+            reset =', discrete['+repr(self._reset)+']'
+        return '%s(%s%r%s%s)'% (
+            self.__class__.__name__, rule, self._value, ni, reset
+        )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class _ReadValue(stm.AbstractSubject, AbstractCell):
+    """Base class for readable cells"""
+
+    __slots__ = '_value', 'next_listener', '_set_by', '_reset', # XXX 'manager'
+
+    def __init__(self, value=None, discrete=False):
+        self._value = value
+        self._set_by = _sentinel
+        stm.AbstractSubject.__init__(self)
+        self._reset = (_sentinel, value)[bool(discrete)]
+
+    def get_value(self):
+        if ctrl.active:
+            # if atomic, make sure we're locked and consistent
+            used(self)
+        return self._value
+
+    value = property(get_value)
+
+    def _finish(self):
+        if self._set_by is not _sentinel:
+            change_attr(self, '_set_by', _sentinel)
+        if self._reset is not _sentinel and self._value != self._reset:
+            change_attr(self, '_value', self._reset)
+            changed(self)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class Value(_ReadValue):
+    """A read-write value with optional discrete mode"""
+
+    __slots__ = ('__weakref__')
+
+    def set_value(self, value):
+        if not ctrl.active:
+            return atomically(self.set_value, value)
+
+        lock(self)
+        if self._set_by is _sentinel:
+            change_attr(self, '_set_by', ctrl.current_listener)
+            on_commit(self._finish)
+
+        if value is self._value:
+            return  # no change, no foul...
+
+        if value!=self._value:
+            if self._set_by is not ctrl.current_listener:
+                # already set by someone else
+                raise InputConflict(self._value, value) #self._set_by) #, value, ctrl.current_listener) # XXX
+            changed(self)
+
+        change_attr(self, '_value', value)
+
+    value = property(_ReadValue.get_value.im_func, set_value)
+
+
+def install_controller(controller):
+    global ctrl
+    stm.ctrl = ctrl = controller
+    for name in [
+        'on_commit', 'on_undo', 'atomically', 'manage', 'savepoint',
+        'rollback_to', 'schedule', 'cancel', 'lock', 'used', 'changed',
+        'run_rule', 'change_attr',
+    ]:
+        globals()[name] = getattr(ctrl, name)
+        if name not in __all__: __all__.append(name)
+
+install_controller(stm.LocalController())
+
+class ReadOnlyCell(_ReadValue, stm.AbstractListener):
+    """A cell with a rule"""
+    __slots__ = 'rule', '_needs_init', 'next_subject', '__weakref__', 'layer'
+
+    def __init__(self, rule, value=None, discrete=False):
+        super(ReadOnlyCell, self).__init__(value, discrete)
+        stm.AbstractListener.__init__(self)
+        self._needs_init = True
+        self.rule = rule
+        self.layer = 0
+
+    def get_value(self):
+        if self._needs_init:
+            if not ctrl.active:
+                # initialization must be atomic
+                atomically(schedule, self)
+                return self._value
+            else:
+                cancel(self); run_rule(self, False)
+        if ctrl.current_listener is not None:
+            used(self)
+        return self._value
+
+    value = property(get_value)
+
+    def run(self):
+        if self._needs_init:
+            change_attr(self, '_needs_init', False)
+            change_attr(self, '_set_by', self)
+            change_attr(self, '_value', self.rule())
+            on_commit(self._finish)
+        else:
+            value = self.rule()
+            if value!=self._value:
+                if self._set_by is _sentinel:
+                    change_attr(self, '_set_by', self)
+                    on_commit(self._finish)
+                change_attr(self, '_value', value)
+                changed(self)
+        if not ctrl.reads: on_commit(self._check_const)
+
+    def _check_const(self):
+        if self.next_subject is None and (
+            self._reset is _sentinel or self._value==self._reset
+        ):
+            change_attr(self, '_set_by', _sentinel)
+            change_attr(self, 'rule', None)
+            change_attr(self, 'next_listener', None)
+            change_attr(self, '__class__', ConstantRule)
+
+
+class _ConstantMixin(AbstractCell):
+    """A read-only abstract cell"""
+
+    __slots__ = ()
 
     def __setattr__(self, name, value):
         """Constants can't be changed"""
         raise AttributeError("Constants can't be changed")
-    def _check_dirty(self, state): return False
-    def observe(self, dep): pass
+
     def __repr__(self):
-        return "%s(%r)" % (type(self).__name__, self.value)
-    def ensure_recalculation(self):
-        raise TypeError("Can't recalculate a cell without a rule")
-
-def _cleanup(state):
-    pulse, observer, ctrl = state
-    while observer is None:
-        if ctrl.now:
-            for item in ctrl.now:
-                item._check_dirty(state)
-            del ctrl.now[:]
-        if not ctrl.later:
-            return    # no changes, stay in the current pulse
-
-        # Begin a new pulse
-        state[0] += 1
-        ctrl.now = ctrl.later; ctrl.notify = ctrl.change
-        ctrl.later = later = []; ctrl.change = later.append
-        ctrl.cell.ensure_recalculation()
+        return "Constant(%r)" % (self.value,)
 
 
-class Cell(ReadOnlyCell):
+class Constant(_ConstantMixin):
+    """A pure read-only value"""
+
+    __slots__ = 'value'
+
+    def __init__(self, value):
+        Constant.value.__set__(self, value)
+
+
+
+
+
+
+
+
+
+
+
+class ConstantRule(_ConstantMixin, ReadOnlyCell):
+    """A read-only cell that no longer depends on anything else"""
+
+    __slots__ = ()
+
+    value = ReadOnlyCell._value
+
+    def dirty(self):
+        """Constants don't need recalculation"""
+        return False
+
+    def run(self):
+        """Constants don't run"""
+
+    def __setattr__(self, name, value):
+        """Constants can't be changed"""
+        if name == '__class__':
+            object.__setattr__(self, name, value)
+        else:
+            super(ConstantRule, self).__setattr__(name, value)
+
+
+class ObserverCell(stm.AbstractListener, AbstractCell):
+    """Rule that performs non-undoable actions"""
+
+    __slots__ = 'run', 'next_subject', '__weakref__'
+
+    layer = Max
+
+    def __init__(self, rule):
+        self.run = rule
+        super(ObserverCell, self).__init__()
+        atomically(schedule, self)
+
+ObserverCell.rule = ObserverCell.run    # alias the attribute for inspection
+
+
+
+
+
+
+class Cell(ReadOnlyCell, Value):
     """Spreadsheet-like cell with automatic updating"""
-    _can_freeze = False
-    __slots__ = '_writebuf'
-    _writable = True
+
+    __slots__ = ()
 
     def __new__(cls, rule=None, value=_sentinel, discrete=False):
         if value is _sentinel and rule is not None:
             return ReadOnlyCell(rule, None, discrete)
+        elif rule is None:
+            return Value([value,None][value is _sentinel], discrete)
         return ReadOnlyCell.__new__(cls, rule, value, discrete)
 
-    def __init__(self, rule=None, value=None, discrete=False):
-        ReadOnlyCell.__init__(self, rule, value, discrete)
-        self._writebuf = _sentinel
+    def _check_const(self): pass    # we can never become Constant
+
+    def get_value(self):
+        if self._needs_init:
+            if not ctrl.active:
+                atomically(schedule, self)  # initialization must be atomic
+                return self._value
+            if self._set_by is _sentinel:
+                # No value set yet, so we have to run() first
+                cancel(self); run_rule(self, False)
+        if ctrl.current_listener is not None:
+            used(self)
+        return self._value
 
     def set_value(self, value):
-        """Set the value of this cell"""
-        pulse, observer, ctrl = state = self._state
-        #if observer is None:
-        #    XXX we should switch to current state here, if needed
-        #elif observer._state is not state:
-        #    raise RuntimeError("Can't access cells in another task/thread")
-        if pulse is not self._version:
-            if self._version is None:   # new, unread/unwritten cell
-                self._writebuf = self._current_val = value; self._changed_as_of = -1
-                ctrl.notify(self)   # schedule for recalc in this pulse
-                if not observer:
-                    _cleanup(state)
-                return
-            self._check_dirty(state)
-        if observer is not None and not observer._is_action:
-            raise RuntimeError("Cells can't be changed by non-@action rules")
-        old = self._writebuf
-        if old is not _sentinel and old is not value and old!=value:
-            raise InputConflict(old, value) # XXX
-        self._writebuf = value
-        ctrl.change(self)
-        if not observer: _cleanup(state)
+        if not ctrl.active:
+            return atomically(self.set_value, value)
+        super(Cell, self).set_value(value)
+        if self._needs_init:
+            schedule(self)
 
-    value = property(ReadOnlyCell.get_value, set_value)
+    value = property(get_value, set_value)
 
-def current_pulse():    return _get_state()[0]
-def current_observer(): return _get_state()[1]
+    def dirty(self):
+        # If we've been manually set, don't reschedule
+        who = self._set_by
+        return who is _sentinel or who is self
+
+
+    def run(self):
+        if self.dirty():
+            # Nominal case: the value hasn't been set in this txn, or was only
+            # set by the rule itself.
+            super(Cell, self).run()
+        elif self._needs_init:
+            # Initialization case: value was set before reading, so we ignore
+            # the return value of the rule and leave our current value as-is,
+            # but of course now we will notice any future changes
+            change_attr(self, '_needs_init', False)
+            self.rule()
+        else:
+            # It should be impossible to get here unless you run the cell
+            # manually.  Don't do that.  :)
+            raise AssertionError("This should never happen!")
+
+
+def modifier(func):
+    """Mark a function as performing modifications to Trellis data
+
+    The wrapped function will always run atomically, and if called from inside
+    a rule, reads performed in the function will not become dependencies of the
+    caller.
+    """
+    def wrap(__func, __module):
+        """
+        if not __module.ctrl.active:
+            return __module.atomically(__func, $args)
+        elif __module.ctrl.current_listener is None:
+            return __func($args)
+        else:
+            # Prevent any reads from counting against the current rule
+            old_reads, __module.ctrl.reads = __module.ctrl.reads, {}
+            try:
+                return __func($args)
+            finally:
+                __module.ctrl.reads = old_reads
+        """
+    return decorators.template_function(wrap)(func, sys.modules[__name__])
+
 
 class _Defaulting(addons.Registry):
     def __init__(self, subject):
@@ -324,6 +403,9 @@ def default_factory(typ, ob, name, celltype=Cell):
             return celltype(rule, discrete=True)
         return celltype(rule)
     return celltype(rule, value, IsDiscrete(typ).get(name, False))
+
+
+
 
 
 class Cells(addons.AddOn):
@@ -401,9 +483,9 @@ def discrete(func):
     """Define a discrete rule attribute"""
     return _discrete(func, __frame=sys._getframe(1))
 
-def action(func):
-    """Define an action cell attribute"""
-    return _rule(func, '@action', action_factory, [(CellValues, NO_VALUE)],
+def observer(func):
+    """Define an observer cell attribute"""
+    return _rule(func, '@observer', observer_factory, [(CellValues, NO_VALUE)],
         __frame=sys._getframe(1)
     )
 
@@ -413,28 +495,17 @@ class Component(decorators.classy):
 
     __slots__ = ()
 
-    decorators.decorate(classmethod)
+    decorators.decorate(classmethod, modifier)
     def __class_call__(cls, *args, **kw):
-        pulse, observer, ctrl = state = _get_state()
-        if observer is not None and observer._is_action:
-            return super(Component, cls).__class_call__(*args, **kw)
-        state[1] = ctrl.action
-        try:
-            rv = super(Component, cls).__class_call__(*args, **kw)
-            if isinstance(rv, cls):
-                cells = Cells(rv)
-                for k, v in IsOptional(cls).iteritems():
-                    if not v and k not in cells:
-                        ctrl.notify(
-                            cells.setdefault(k,
-                                CellFactories(cls)[k](cls, rv, k))
-                        )
-        finally:
-            state[1] = observer
-        if observer is None:
-            _cleanup(state)
+        rv = super(Component, cls).__class_call__(*args, **kw)
+        if isinstance(rv, cls):
+            cells = Cells(rv)
+            for k, v in IsOptional(cls).iteritems():
+                if not v and k not in cells:
+                    c = cells.setdefault(k, CellFactories(cls)[k](cls, rv, k))
+                    c.value     # XXX
         return rv
-            
+
     def __init__(self, **kw):
         if kw:
             cls = type(self)
@@ -449,38 +520,36 @@ class Component(decorators.classy):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
 def repeat():
     """Schedule the current rule to be run again, repeatedly"""
-    observer = current_observer()
-    if observer:
-        observer.ensure_recalculation()
+    if ctrl.current_listener is not None:
+        on_commit(schedule, ctrl.current_listener)
     else:
         raise RuntimeError("repeat() must be called from a rule")
-    
+
 def poll():
     """Recalculate this rule the next time *any* other cell is set"""
-    pulse, observer, ctrl = _get_state()
-    if observer:
-        return ctrl.cell.value
-    else:
+    listener = ctrl.current_listener
+    if listener is None or not hasattr(listener, '_needs_init'):
         raise RuntimeError("poll() must be called from a rule")
+    else:
+        return ctrl.pulse.value
 
 def dirty():
     """Force the current rule's return value to be treated as if it changed"""
-    current_observer()._current_val = _sentinel
-
-
-class DummyAction(Constant):
-    """Placeholder cell used by @modifier and Component() to enter mod state"""
-
-    __slots__ = ()   
-    _is_action = True
-
-    def __init__(self):
-        Constant.__init__(self, None)
-
-
-AbstractCell = ReadOnlyCell     # XXX
+    assert ctrl.current_listener is not None, "dirty() must be called from a rule"
+    changed(ctrl.current_listener)
 
 
 
@@ -490,15 +559,68 @@ AbstractCell = ReadOnlyCell     # XXX
 
 
 
-class TaskCell(ActionCell):
+
+
+
+
+
+
+
+
+
+
+
+
+
+class TaskCell(AbstractCell, stm.AbstractListener):
     """Cell that manages a generator-based task"""
-    __slots__ = '_result', '_error'
+    
+    __slots__ = (
+        '_result', '_error', '_step', 'next_subject', 'layer', '_loop',
+        '_scheduled', '__weakref__',
+    )
 
     def __init__(self, func):
+        self._step = self._stepper(func)
+        self.layer = 0
+        self.next_subject = None
+        from activity import EventLoop
+        self._loop = EventLoop.get()
+        self._scheduled = False
+        atomically(self.dirty)
+
+    def dirty(self):
+        if not self._scheduled:
+            change_attr(self, '_scheduled', True)
+            on_commit(self._loop.call, atomically, self.do_run)
+            on_commit(change_attr, self, '_scheduled', False)
+        return False
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def _stepper(self, func):
         VALUE = self._result = []
         ERROR = self._error  = []               
-        STACK = [func()]; CALL = STACK.append; RETURN = STACK.pop;
-        def step():
+        STACK = [func()]
+        CALL = STACK.append
+        RETURN = STACK.pop
+
+        def _step():
             while STACK:
                 try:
                     it = STACK[-1]
@@ -525,17 +647,37 @@ class TaskCell(ActionCell):
                     VALUE.append(rv)
                     if len(STACK)==1: break
                     RETURN()
-            if STACK and not ERROR and not current_observer()._mailbox.dependencies:
-                repeat()    # don't become Constant while still running
+            if STACK and not ERROR and not ctrl.reads:
+                ctrl.current_listener.dirty()    # re-run if still running
             return resume()
 
-        ReadOnlyCell.__init__(self, step, None, False)
+        return _step
 
-class CompletedTask(Constant, TaskCell):
-    """Task that has exhausted its generator"""
-    __slots__ = ()
 
-TaskCell._const_type = CompletedTask
+    def do_run(self):
+        ctrl.current_listener = self
+        try:
+            try:
+                self._step()
+                # process writes as if from a non-rule perspective
+                writes = ctrl.writes
+                has_run = ctrl.has_run.get
+                while writes:
+                    subject, writer = writes.popitem()
+                    for dependent in subject.iter_listeners():
+                        if has_run(dependent) is not self:
+                            if dependent.dirty():
+                                schedule(dependent)
+
+                # process reads in normal fashion
+                ctrl._process_reads(self)
+
+            except:
+                ctrl.reads.clear()
+                ctrl.writes.clear()
+                raise           
+        finally:
+            ctrl.current_listener = None
 
 Pause = symbols.Symbol('Pause', __name__)
 
@@ -544,9 +686,18 @@ def Return(value):
     """Wrapper for yielding a value from a task"""
     return value,
 
+
+
+
+
+
+
+
+
+
 def resume():
     """Get the result of a nested task invocation (needed for Python<2.5)"""
-    c = current_observer()
+    c = ctrl.current_listener
     if not isinstance(c, TaskCell):
         raise RuntimeError("resume() must be called from a @trellis.task")
     elif c._result:
@@ -557,20 +708,33 @@ def resume():
             raise e[0], e[1], e[2]
         finally:
             del e
-    elif c._reset is not _sentinel:
-        return c._reset
-    else:
-        return c._current_val
 
 def task_factory(typ, ob, name):
     return default_factory(typ, ob, name, TaskCell)
 
-def action_factory(typ, ob, name):
-    return default_factory(typ, ob, name, ActionCell)
+def observer_factory(typ, ob, name):
+    return default_factory(typ, ob, name, ObserverCell)
 
 def task(func):
     """Define a rule cell attribute"""
     return _rule(func, '@task', task_factory, __frame=sys._getframe(1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class CellProperty(object):
     """Descriptor for cell-based attributes"""
@@ -606,7 +770,7 @@ class CellProperty(object):
                 name = self.__name__
                 typ = type(ob)
                 cell =  CellFactories(typ)[name](typ, ob, name)
-                if not cell._writable:
+                if not hasattr(cell, 'set_value'):
                     return cells.setdefault(name, Constant(value))
                 cell = cells.setdefault(name, cell)
             cell.value = value
@@ -656,11 +820,14 @@ def _invoke_callback(
 
 class TodoProperty(CellProperty):
     """Property representing a ``todo`` attribute"""
+
     decorators.decorate(property)
     def future(self):
         """Get a read-only property for the "future" of this attribute"""
         name = self.__name__
         def get(ob):
+            if not ctrl.active:
+                raise RuntimeError("future can only be accessed from a @modifier")
             try: cells = ob.__cells__
             except AttributeError: cells = Cells(ob)
             try:
@@ -669,32 +836,29 @@ class TodoProperty(CellProperty):
                 typ = type(ob)
                 cell = CellFactories(typ)[name](typ, ob, name)
                 cell = cells.setdefault(name, cell)
-            if cell._writebuf is _sentinel:
-                pulse, observer, ctrl = _get_state()
-                if not observer or not observer._is_action:
-                    raise RuntimeError("future can only be accessed from a @modifier")
+            if cell._set_by is _sentinel:
                 cell.value = CellRules(type(ob))[name].__get__(ob)()
-            return cell._writebuf            
+                changed(cell)
+            return cell._value
         return property(get, doc="The future value of the %r attribute" % name)
+
 
 def todo_factory(typ, ob, name):
     """Factory for ``todo`` cells"""
     rule = CellRules(typ).get(name).__get__(ob, typ)
     return Cell(None, rule(), True)
 
-def modifier(method):
-    """Mark a method as performing modifications to Trellis data"""
-    def wrap(__method,__get_state,__cleanup):
-        """
-        __pulse, __observer, __ctrl = __state = __get_state()
-        if __observer is not None:
-            if __observer._is_action:
-                return __method($args)
-            raise RuntimeError("@modifiers can't be called from non-@action rules")
-        __state[1] = __ctrl.action
-        try:     return __method($args)
-        finally: __state[1] = __observer; __cleanup(__state)"""
-    return decorators.template_function(wrap)(method,_get_state,_cleanup)
+
+
+
+
+
+
+
+
+
+
+
 class Dict(UserDict.IterableUserDict, Component):
     """Dictionary-like object that recalculates observers when it's changed
 
@@ -744,7 +908,7 @@ class Dict(UserDict.IterableUserDict, Component):
         if self.deleted:
             dirty()
             for key in self.deleted:
-                del data[key]
+                if key in data: del data[key]   # XXX
         if self.added:
             dirty(); data.update(self.added)
         if self.changed:
@@ -842,11 +1006,11 @@ class List(UserList.UserList, Component):
     def __init__(self, other=(), **kw):
         Component.__init__(self, **kw)
         self.data[:] = other
-    
-    decorators.decorate(rule)    
+
+    decorators.decorate(rule)
     def data(self):
         if self.changed:
-            return self.updated
+            dirty(); return self.updated
         return self.data or []
 
     decorators.decorate(modifier)
@@ -1103,5 +1267,10 @@ def to_dict_or_set(ob):
     return ob
 
   
+
+
+  
+
+
 
 

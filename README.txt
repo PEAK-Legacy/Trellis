@@ -52,7 +52,7 @@ Here's a super-trivial example::
     ...         F = lambda self: self.C * 1.8 + 32,
     ...         C = lambda self: (self.F - 32)/1.8,
     ...     )
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def show_values(self):
     ...         print "Celsius......", self.C
     ...         print "Fahrenheit...", self.F
@@ -133,7 +133,7 @@ To define a simple cell attribute, you can use the ``trellis.rules()`` and
 ``trellis.values()`` functions inside the class body to define multiple rules
 and values.  Or, you can use the ``@trellis.rule`` decorator to turn an
 individual function into a rule, or define a single value attribute by calling
-``trellis.value``.  Last, but not least, you can use ``@trellis.action`` to
+``trellis.value``.  Last, but not least, you can use ``@trellis.observer`` to
 define a rule that does something other than just computing a value.  Here's an
 example that uses all of these approaches, simply for the sake of
 illustration::
@@ -154,7 +154,7 @@ illustration::
     ...     def right(self):
     ...         return self.left + self.width
     ...
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def show(self):
     ...         print self
     ...
@@ -312,7 +312,7 @@ turn it into an "optional" action, so that it won't run unless we ask it to::
 
     >>> class QuietRectangle(Rectangle):
     ...     @trellis.optional
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def show(self):
     ...         print self
 
@@ -361,7 +361,7 @@ For example::
     >>> class Viewer(trellis.Component):
     ...     trellis.values(model = None)
     ...
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def view_it(self):
     ...         if self.model is not None:
     ...             print self.model
@@ -645,7 +645,7 @@ define a value cell for the text in its class::
     >>> class TextEditor(trellis.Component):
     ...     text = trellis.value('')
     ...
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def display(self):
     ...         print "updating GUI to show", repr(self.text)
 
@@ -691,7 +691,7 @@ new high temperature is seen::
     ...         new_high = lambda self: self.max_and_new[1]
     ...     )
     ...
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def monitor(self):
     ...         if self.new_high:
     ...             print "New high"
@@ -771,8 +771,8 @@ and a simple viewer.  Let's link them up together to make a rectangle that
 gets wider and taller whenever the Celsius temperature reaches a new high::
 
     >>> tc = TempConverter()
-    Celsius...... 0
-    Fahrenheit... 32
+    Celsius...... 0.0
+    Fahrenheit... 32.0
 
     >>> hd = HighDetector2(value = trellis.Cells(tc)['C'])
     >>> cr = ChangeableRectangle(
@@ -833,7 +833,7 @@ so that they can happen later, after all the desired changes have happened.
 That way, they don't take effect until the current event is completely
 finished.
 
-The Trellis actually does the same thing, but its internal "event queue" is
+The Trellis actually does something similar, but its internal "event queue" is
 automatically flushed whenever you set a value from outside a rule.  If you
 want to set multiple values, you need to use a ``@modifier`` function or
 method like this one, which we could've made a Rectangle method, but didn't::
@@ -846,15 +846,16 @@ method like this one, which we could've made a Rectangle method, but didn't::
     >>> set_position(r, 55, 22)
     Rectangle((55, 22), (18, 10), (73, 32))
 
-Changes made by a ``modifier`` function do not take effect until the current
-recalculation sweep is completed, which will be no sooner than the *outermost*
-active ``modifier`` function returns.  (In other words, if one ``modifier``
-calls another ``modifier``, the inner modifier's changes don't take effect
-until the same time as the outer modifier's changes do.)
+Notifications of changes made by a ``modifier`` do not take effect until the
+*outermost* active ``modifier`` function returns.  (In other words, if one
+``modifier`` calls another ``modifier``, the inner modifier's changes don't
+cause notifications to occur until the same time as the outer modifier's
+changes do.)
 
-Now, pay close attention to what this delayed update process means.  When
-we say "changes don't take effect", we *really* mean, "changes don't take
-effect"::
+Now, notice that this means that within a ``modifier``, you can't rely on any
+values controlled by rules to be updated when you make changes.  This means
+it's generally a bad idea for a rule to look at what it's changing.  For
+example::
 
     >>> @trellis.modifier
     ... def set_position(rectangle, left, top):
@@ -863,20 +864,13 @@ effect"::
     ...     print rectangle
 
     >>> set_position(r, 22, 55)
-    Rectangle((55, 22), (18, 10), (73, 32))
+    Rectangle((22, 55), (18, 10), (73, 32))
     Rectangle((22, 55), (18, 10), (40, 65))
 
-Notice that although the ``set_position`` had just set new values for ``.left``
-and ``.top``, it printed the *old* values for those attributes!  In other
-words, it's not just the notification of observers that's delayed, the actual
-*changes* are delayed, too.
-
-Why?  Because the whole point of a ``modifier`` is that it makes all its
-changes *at the same time*.  If the changes actually took effect one by one
-as you made them, then they wouldn't be happening "at the same time".
-
-In other words, there would be an order dependency -- the very thing we want
-to **get rid of**.
+The first print is from inside the rule, showing that from the rule's
+perspective, the bottom/right co-ordinates are not updated to reflect the
+changed top/left co-ordinates.  The second print is from an observer, showing
+that the values *do* get updated after the modifier has exited.
 
 
 The Evil of Order Dependency
@@ -911,8 +905,8 @@ And all you have to do to get the benefits, is to divide your code three ways:
   cells, attributes, or other data structures (apart from local variables)
 
 * Action rules that send data on to other systems (like the screen, a socket,
-  a database, etc.).  This code may appear in ``@trellis.action`` rules, or it
-  can be "application" code that reads results from a finished trellis
+  a database, etc.).  This code may appear in ``@trellis.observer`` rules, or
+  it can be "application" code that reads results from a finished trellis
   calculation.
 
 The first and third kinds of code are inherently order-dependent, since
@@ -995,22 +989,31 @@ Rule 3 - If You MUST Set, Do It From One Place or With One Value
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you set a value from more than one place, you are introducing an order
-dependency.  In fact, if you set a value more than once in an action or
-modifier, the Trellis will stop you.  After all, all changes in an action or
-modifier happen "at the same time".  And what would it mean to set a value to
-22 and 33 "at the same time"?  A conflict error, that's what it would mean::
+dependency.  In fact, if you set a value from more than one rule, the Trellis
+will stop you, unless the values are equal.  For example::
 
-    >>> @trellis.modifier
-    ... def set_twice():
-    ...     set_position(r, 22, 55)
-    ...     set_position(r, 33, 66)
+    >>> class Conflict(trellis.Component):
+    ...     value = trellis.value(99)
+    ...
+    ...     @trellis.rule
+    ...     def ruleA(self):
+    ...         self.value = 22
+    ...
+    ...     @trellis.rule
+    ...     def ruleB(self):
+    ...         self.value = 33
 
-    >>> set_twice()
+    >>> Conflict()
     Traceback (most recent call last):
       ...
-    InputConflict: (22, 33)
+    InputConflict: (33, 22)
 
-This rule is for your protection, because it makes it impossible for you to
+This example fails because the two rules set different values for the ``value``
+attribute, causing a conflict error.  Since the rules don't agree, the result
+would depend on the order in which the rules happened to run -- which again is
+precisely what we don't want in an event-driven program.
+
+So this rule is for your protection, because it makes it impossible for you to
 accidentally set the same thing in two different places in response to an
 event, and then miss the bug or be unable to reproduce it because the second
 change masks the first!
@@ -1018,9 +1021,9 @@ change masks the first!
 Instead, what happens is that assigning two different values to the same cell
 in response to the same event always produces an error message, making it
 easier to find the problem.  Of course, if you arrange your input code so that
-only one piece of input code is setting trellis values for a given event, and
-you don't change values from inside of computations (rule 2 above), then you'll
-never have this problem.
+only one piece of input code is setting trellis values for a given event, or
+only one piece of code ever modifies a given cell or data structure, then
+you'll never have this problem.
 
 Of course, if all of your code is setting a cell to the *same* value, you won't
 get a conflict error either.  This is mostly useful for e.g. receiver cells
@@ -1103,7 +1106,7 @@ change is taking place they temporarily become non-empty.  For example::
     >>> view.model = None
 
     >>> class Dumper(trellis.Component):
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def dump(self):
     ...         for name in 'added', 'changed', 'deleted':
     ...             if getattr(d, name):
@@ -1180,7 +1183,7 @@ Similar to the ``Dict`` type, the ``Set`` type offers receiver set attributes,
     >>> view.model = None
 
     >>> class Dumper(trellis.Component):
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def dump(self):
     ...         for name in 'added', 'removed':
     ...             if getattr(s, name):
@@ -1244,7 +1247,7 @@ Only in rule code will you ever see it true, a moment before it becomes false::
     >>> view.model = None   # quiet, please
 
     >>> class Watcher(trellis.Component):
-    ...     @trellis.action
+    ...     @trellis.observer
     ...     def dump(self):
     ...         print myList.changed
 
@@ -1506,9 +1509,9 @@ a temperature converter implemented directly with cells::
     >>> C = trellis.Cell(lambda: (F.value - 32)/1.8, 0)
 
     >>> F.value
-    32
+    32.0
     >>> C.value
-    0
+    0.0
     >>> F.value = 212
     >>> C.value
     100.0
@@ -1579,7 +1582,7 @@ In fact, it's not even a ``Cell`` instance, but of a different type
 altogether::
 
     >>> roc
-    ReadOnlyCell(<function <lambda> at ...>, None [out-of-date])
+    ReadOnlyCell(<function <lambda> at ...>, None [uninitialized])
 
 What the above means is that you have a read-only cell whose current value is
 ``None``, but is out-of-date.  This means that if you actually try to *read*
@@ -1651,9 +1654,9 @@ As we saw in the main tutorial, the ``trellis.Cells()`` API returns a
 dictionary of active cells for a component::
 
     >>> trellis.Cells(view)
-    {'model': Cell(None, [1, 2, 3, 4] [out-of-date]),
-     'view_it': ActionCell(<bound method Viewer.view_it of
-                           <Viewer object at 0x...>>, None [out-of-date])}
+    {'model': Value([1, 2, 3, 4]),
+     'view_it': ObserverCell(<bound method Viewer.view_it of
+                             <Viewer object at 0x...>>, None)}
 
 In the case of a ``Component``, this data is also stored in the component's
 ``__cells__`` attribute::
@@ -1687,15 +1690,15 @@ it resets to between received (or calculated) values.  If you want to make
 a discrete rule, just include a rule in addition to the default value and the
 discrete flag.
 
-"Action" cells are implemented with the ``trellis.ActionCell`` class::
+"Observer" cells are implemented with the ``trellis.ObserverCell`` class::
 
     >>> trellis.Cells(view)['view_it']
-    ActionCell(<bound method Viewer.view_it of
-               <Viewer object at 0x...>>, None [out-of-date])
+    ObserverCell(<bound method Viewer.view_it of
+               <Viewer object at 0x...>>, None)
 
-The ActionCell constructor takes only one parameter: a zero-argument callable,
+The ObserverCell constructor takes only one parameter: a zero-argument callable,
 such as a bound method or a function with no parameters.  You can't set a value
-for an ``ActionCell`` (because it's not writable), nor can you make it discrete
+for an ``ObserverCell`` (because it's not writable), nor can you make it discrete
 (since that would imply a readable value, and action cells exist only for their
 side-effects).
 
@@ -1733,7 +1736,7 @@ you can get it to run across multiple trellis recalculations, retaining its
 state along the way.  For example::
 
     >>> class TaskExample(trellis.Component):
-    ...     trellis.receivers(
+    ...     trellis.values(
     ...         start = False,
     ...         stop = False
     ...     )
@@ -1749,14 +1752,17 @@ state along the way.  For example::
     ...         print "stopped"
 
     >>> t = TaskExample()
+    >>> from peak.events.activity import EventLoop
+    >>> EventLoop.flush()
     waiting to start
 
     >>> t.start = True
+    >>> EventLoop.flush()
     starting
-    waiting to stop
     waiting to stop
 
     >>> t.stop = True
+    >>> EventLoop.flush()
     stopped
 
 A ``@trellis.task`` is like a ``@trellis.action``, in that it is allowed to
@@ -1777,13 +1783,19 @@ finished, and any further changes will not re-invoke it.  In fact, if we
 examine the cell, we'll see that it has become a ``CompletedTask`` cell::
 
     >>> trellis.Cells(t)['demo']
+    TaskCell(None)
+
     CompletedTask(None)
 
 even though it's initially a ``TaskCell``::
 
     >>> trellis.Cells(TaskExample())['demo']
-    waiting to start
+    TaskCell(None)
+
     TaskCell(<function step...>, None)
+
+    >>> EventLoop.flush()
+    waiting to start
 
 
 Invoking Subtasks
@@ -1793,7 +1805,7 @@ Tasks can invoke or "call" other generators by yielding them.  For example, we
 can rewrite our example like this, for more modularity::
 
     >>> class TaskExample(trellis.Component):
-    ...     trellis.receivers(
+    ...     trellis.values(
     ...         start = False,
     ...         stop = False
     ...     )
@@ -1816,14 +1828,16 @@ can rewrite our example like this, for more modularity::
     ...         print "stopped"
 
     >>> t = TaskExample()
+    >>> EventLoop.flush()
     waiting to start
 
     >>> t.start = True
+    >>> EventLoop.flush()
     starting
-    waiting to stop
     waiting to stop
 
     >>> t.stop = True
+    >>> EventLoop.flush()
     stopped
 
 Yielding a generator from a ``@task`` causes that generator to temporarily
@@ -1939,9 +1953,10 @@ to cells.  For example::
     ...     print c.value
 
     >>> trellis.TaskCell(demo_task).value
-    27
+    >>> EventLoop.flush()
     19
 
+    
 As you can see, changing the value of a cell inside a task is like changing it
 inside a ``@modifier`` or ``@action`` -- the change doesn't take effect until
 a new recalculation occurs, and the *current* recalculation can't finish until
@@ -1962,7 +1977,9 @@ anything, how does it get resumed after a pause?  Let's see what happens::
     ...     print 2
 
     >>> trellis.TaskCell(demo_task).value
+    >>> EventLoop.flush()
     1
+    >>> EventLoop.flush()
     2
 
 As you can see, a task with no dependencies, (i.e., one that hasn't looked at
@@ -2299,6 +2316,7 @@ But if anything is waiting, like say, our ``IdleTimeout`` object from the
 previous section, it returns the relative or absolute time of the next time
 ``tick()`` will need to be called::
 
+    >>> Time.auto_update = False
     >>> it = IdleTimer(idle_timeout=30)
 
     >>> Time.next_event_time(relative=True)
