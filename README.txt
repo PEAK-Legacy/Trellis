@@ -134,9 +134,8 @@ To define a simple cell attribute, you can use the ``trellis.rules()`` and
 and values.  Or, you can use the ``@trellis.rule`` decorator to turn an
 individual function into a rule, or define a single value attribute by calling
 ``trellis.value``.  Last, but not least, you can use ``@trellis.observer`` to
-define a rule that does something other than just computing a value.  Here's an
-example that uses all of these approaches, simply for the sake of
-illustration::
+define a rule that performs actions outside the Trellis.  Here's an example
+that uses all of these approaches, simply for the sake of illustration::
 
     >>> class Rectangle(trellis.Component):
     ...     trellis.values(
@@ -173,8 +172,8 @@ illustration::
     >>> r.left = 25
     Rectangle((25, 0), (17, 10), (42, 10))
 
-By the way, any attributes for which you define an action or a rule (but *not*
-a value) will be read-only::
+By the way, any attributes for which you define a rule (but *not* a value) will
+be read-only::
 
     >>> r.bottom = 99
     Traceback (most recent call last):
@@ -194,9 +193,10 @@ way if you need or want to:
    dictionary that will hold all the ``Cell`` objects used to implement cell
    attributes.
 
-2. It takes any keyword arguments it receives, and uses them to initialize any
-   named attributes.  (Note that you don't necessarily have to do this, but it
-   often comes in handy.)
+2. The ``__init__`` method takes any keyword arguments it receives, and uses
+   them to initialize any named attributes.  (Note that this is the *only*
+   thing the ``__init__`` method does, so you don't have to call it unless you
+   want this behavior.)
 
 3. It creates a cell for each of the object's non-optional cell attributes,
    in order to initialize their rules and set up their dependencies.  We'll
@@ -221,38 +221,38 @@ That's because of two important Trellis principles:
 
 1. When a ``Component`` instance is created, all its "non-optional" cell
    attributes are calculated at the end of ``Component.__init__()``.  That is,
-   if they have a rule, it gets invoked, and the result is used to determine
-   the cell's initial value.
+   if they have a rule or observer, it gets invoked, and the result is used to
+   determine the cell's initial value.
 
-2. While a cell's rule is running, *any* trellis Cell that is looked at becomes
-   a dependency of that rule.  If the looked-at cell changes later, it triggers
-   recalculation of the rule that looked.  In Trellis terms, we say that the
-   first cell has become an "observer" of the second cell.
+2. While a cell's rule is running, *any* trellis Cell whose value is looked at
+   becomes a dependency of that rule.  If the looked-at cell changes later, it
+   triggers recalculation of the rule that "looked".  In Trellis terms, we say
+   that the first cell has become a "listener" of the second cell.
 
 The first of these principles explains why the rectangle printed itself
-immediately: the ``show`` rule was calculated.  We can see this if we look at
-the rectangle's ``show`` attribute::
+immediately: the ``show`` observer cell was activated.  We can see this if we
+look at the rectangle's ``show`` attribute::
 
     >>> print r.show
     None
 
-(The ``show`` rule didn't return a specific value, so the resulting attribute
-value is ``None``.  Also notice that *rules are not methods* -- they are more
-like properties.)
+(The ``show`` rule is an observer, so the resulting attribute value is
+``None``.  Also notice that *rules are not methods* -- they are more like
+properties.)
 
 The second principle explains why the rectangle re-prints itself any time one
 of the attributes changes value: all six attributes are referenced by the
-``__repr__`` method, which is called when the ``show`` rule prints the
+``__repr__`` method, which is called when the ``show`` observer prints the
 rectangle.  Since the cells that store those attributes are being looked at
 during the execution of another cell's rule, they become dependencies, and the
-``show`` rule is thus recalculated whenever the observed cells change.
+``show`` rule is thus recalculated whenever the listened-to cells change.
 
 Each time a rule runs, its dependencies are automatically re-calculated --
 which means that if you have more complex rules, they can actually depend on
 different cells every time they're calculated.  That way, the rule is only
 recalculated when it's absolutely necessary.
 
-By the way, an observed cell has to actually *change* its value (as determined
+By the way, a listened-to cell has to actually *change* its value (as determined
 by the ``!=`` operator), in order to trigger recalculation.  Merely setting a
 cell doesn't cause its observers to recalculate::
 
@@ -298,17 +298,18 @@ or any time before it is first read::
 
 However, since this rule is not an "optional" rule, the ``Component.__init__``
 method will read it, meaning that the only chance we get to override it is
-via the keyword arguments.  In the next section, we'll look at how to create
-"optional" rules: ones that don't get calculated the moment a component is
-created.
+via the keyword arguments (or by setting it in a subclass ``__init__`` method).
+In the next section, we'll look at how to create "optional" rules: ones that
+don't get calculated at the moment a component is created.
 
 
 "Optional" Rules and Subclassing
 --------------------------------
 
-The ``show`` rule we've been playing with on our ``Rectangle`` class is kind of
-handy for debugging, but it's kind of annoying when you don't need it.  Let's
-turn it into an "optional" action, so that it won't run unless we ask it to::
+The ``show`` observer we've been playing with on our ``Rectangle`` class is
+kind of handy for debugging, but it's kind of annoying when you don't need it.
+Let's turn it into an "optional" observer, so that it won't run unless we ask
+it to::
 
     >>> class QuietRectangle(Rectangle):
     ...     @trellis.optional
@@ -344,7 +345,7 @@ silent, since we haven't activated *their* ``show`` cells::
 
 Notice, by the way, that rules are more like properties than methods, which
 means you can't use ``super()`` to call the inherited version of a rule.
-(Later, we'll look at other ways to access rule definitions.)
+(XXX Later, we'll look at other ways to access rule definitions.)
 
 
 Model-View-Controller and the "Observer" Pattern
@@ -401,12 +402,12 @@ recalculated?  The rule references ``self.model``, which is a value cell
 attribute.  So if you change ``view.model``, this triggers a recalculation,
 too.
 
-Remember: once a rule observes another cell, it will be recalculated whenever
-the observed value changes.  Each time ``view_it`` is recalculated, it renews
+Remember: once a rule reads another cell, it will be recalculated whenever the
+previously-read value changes.  Each time ``view_it`` is invoked, it renews
 its dependency on ``self.model``, but *also* acquires new dependencies on
 whatever the ``repr()`` of ``self.model`` looks at.  Meanwhile, any
 dependencies on the attributes of the *previous* ``self.model`` are dropped,
-so changing them doesn't cause the rule to be recalculated any more.  This
+so changing them doesn't cause the observer to be re-invoked any more.  This
 means we can even do things like set ``model`` to a non-component object, like
 this::
 
@@ -422,7 +423,7 @@ To be able to observe mutable data structures, you need to use data types like
 ``trellis.Dict`` and ``trellis.List`` instead of the built-in Python types.
 We'll cover how that works in the section below on `Mutable Data Structures`_.
 
-By the way, the links from a cell to its observers are defined using weak
+By the way, the links from a cell to its listeners are defined using weak
 references.  This means that views (and cells or components in general) can
 be garbage collected even if they have dependencies.  For more information
 about how Trellis objects are garbage collected, see the later section on
@@ -474,9 +475,6 @@ easy to do this, using rules that refer to their previous value::
 
 As you can see, referring to the value of a cell from inside the rule that
 computes the value of that cell, will return the *previous* value of the cell.
-Notice, by the way, that this technique can be extended to keep track of an
-arbitrary number of variables, if you create a rule that returns a tuple.
-We'll use this technique more later on.
 
 
 Beyond The Spreadsheet: "Receiver" Cells
@@ -674,7 +672,7 @@ events instead?
 Let's look at an example.  Suppose you'd like to trigger an action whenever a
 new high temperature is seen::
 
-    >>> class HighDetector(trellis.Component):
+    >>> class HighDetector(trellis.Component):  # XXX
     ...     value = trellis.value(0)
     ...     max_and_new = trellis.value((None, False))
     ...
@@ -812,7 +810,7 @@ Managing State Changes
 
 Time is the enemy of event-driven programs.  They say that time is "nature's
 way of keeping everything from happening at once", but in event-driven programs
-we usually *want* certain things to happen "at once"!
+we usually *want* certain things to happen "all at once"!
 
 For example, suppose we want to change a rectangle's top and left
 co-ordinates::
@@ -872,6 +870,7 @@ perspective, the bottom/right co-ordinates are not updated to reflect the
 changed top/left co-ordinates.  The second print is from an observer, showing
 that the values *do* get updated after the modifier has exited.
 
+XXX Rollback
 
 The Evil of Order Dependency
 ----------------------------
@@ -940,21 +939,21 @@ programs, here are a few brief guidelines that will keep your code easy to
 write, understand, and debug.
 
 
-Rule 1 - If Order Matters, Use Only One Action
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Rule 1 - If Order Matters, Use Only One Observer
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you care what order two "outside world" side-effects happen in, code them
-both in the same action rule.
+both in the same observer.
 
-For example, in the ``TempConverter`` demo, we had a rule that printed the
-Celsius and Fahrenheit temperatures.  If we'd put those two ``print``
-statements in separate actions, we'd have had no control over the output order;
-either Celsius or Fahrenheit might have come first on any given change to the
+For example, in the ``TempConverter`` demo, we had an observer that printed the
+Celsius and Fahrenheit temperatures.  If we'd put those two ``print`` statements
+in separate observers, we'd have had no control over the output order; either
+Celsius or Fahrenheit might have come first on any given change to the
 temperatures.  So, if you care about the relative order of certain output or
-actions, you must put them all in one rule.  If that makes the rule too big or
-complex, you can always refactor to extract new rules to calculate the
+actions, you must put them all in one observer.  If that makes the code too big
+or complex, you can always refactor to extract new rules to calculate the
 intermediate values.  Just don't put any of the *actions* (i.e. side-effects or
-outputs) in the other rules, only the *calculations*.  Then have an action rule
+outputs) in the other rules, only the *calculations*.  Then have an observer
 that *only* does the output or actions.
 
 
@@ -1585,10 +1584,11 @@ altogether::
     ReadOnlyCell(<function <lambda> at ...>, None [uninitialized])
 
 What the above means is that you have a read-only cell whose current value is
-``None``, but is out-of-date.  This means that if you actually try to *read*
-the value of this cell, it may or may not match what the ``repr()`` showed.
-(This is because simply looking at the cell shouldn't cause the cell to
-recalculate; that would be very painful when debugging).
+``None``, but has not yet been initialized.  This means that if you actually
+try to *read* the value of this cell, it may or may not match what the
+``repr()`` showed.  (This is because simply looking at the cell shouldn't
+cause the cell's value to be calculated; that could be very painful when
+debugging).
 
 If we actually read the value of this cell, the rule will be run::
 
@@ -1603,7 +1603,7 @@ again, to a ``Constant``::
 
 Since the rule didn't depend on any other cells, there is never any way that
 it could be meaningfully recalculated.  Thus, it becomes constant, and cannot
-be observed by any other rules.  If we create another rule that reads this
+be listened-to by any other rules.  If we create another rule that reads this
 cell, it will not end up depending on it::
 
     >>> cell2 = trellis.Cell(lambda: roc.value)
@@ -1669,8 +1669,8 @@ shared cells.  It also lets you access cell objects directly, in order to e.g.
 register their ``set_value()`` methods as callbacks for other systems.
 
 
-Discrete and Action Cells
--------------------------
+Discrete and Observer Cells
+---------------------------
 
 To make a cell "discrete" (i.e. a receiver or discrete rule), you set its
 third constructor argument (i.e., ``discrete``) to true::
@@ -1699,8 +1699,8 @@ discrete flag.
 The ObserverCell constructor takes only one parameter: a zero-argument callable,
 such as a bound method or a function with no parameters.  You can't set a value
 for an ``ObserverCell`` (because it's not writable), nor can you make it discrete
-(since that would imply a readable value, and action cells exist only for their
-side-effects).
+(since that would imply a readable value, and observer cells exist only for
+their side-effects).
 
 
 Cell Attribute Metadata
@@ -1727,687 +1727,23 @@ need and call it.  This particular registry should be a relatively stable API
 across releases.
 
 
-Co-operative Multitasking
-=========================
-
-The Trellis allows for a limited form of co-operative multitasking, using
-generator functions.  By declaring a generator function as a ``@task`` method,
-you can get it to run across multiple trellis recalculations, retaining its
-state along the way.  For example::
-
-    >>> class TaskExample(trellis.Component):
-    ...     trellis.values(
-    ...         start = False,
-    ...         stop = False
-    ...     )
-    ...     @trellis.task
-    ...     def demo(self):
-    ...         print "waiting to start"
-    ...         while not self.start:
-    ...             yield trellis.Pause
-    ...         print "starting"
-    ...         while not self.stop:
-    ...             print "waiting to stop"
-    ...             yield trellis.Pause
-    ...         print "stopped"
-
-    >>> t = TaskExample()
-    >>> from peak.events.activity import EventLoop
-    >>> EventLoop.flush()
-    waiting to start
-
-    >>> t.start = True
-    >>> EventLoop.flush()
-    starting
-    waiting to stop
-
-    >>> t.stop = True
-    >>> EventLoop.flush()
-    stopped
-
-A ``@trellis.task`` is like a ``@trellis.action``, in that it is allowed to
-modify other cells, and its output cannot be observed by normal rules.  The
-function you decorate it with, however, must be a generator.  The generator
-can yield ``trellis.Pause`` in order to suspend itself until a cell it depends
-on has changed.
-
-In the above example, the task initially depends on the value of the ``start``
-cell, so it is not resumed until ``start`` is set to ``True``.  Then it prints
-"starting", and waits for ``self.stop`` to become true.  However, at this point
-it now depends on both ``start`` *and* ``stop``, and since ``start`` is a
-"receiver" cell, it resets to ``False``, causing the task to resume.  (Which is
-why "waiting to stop" gets printed twice at that point.)
-
-We then set ``stop`` to true, which causes the loop to exit.  The task is now
-finished, and any further changes will not re-invoke it.  In fact, if we
-examine the cell, we'll see that it has become a ``CompletedTask`` cell::
-
-    >>> trellis.Cells(t)['demo']
-    TaskCell(None)
-
-    CompletedTask(None)
-
-even though it's initially a ``TaskCell``::
-
-    >>> trellis.Cells(TaskExample())['demo']
-    TaskCell(None)
-
-    TaskCell(<function step...>, None)
-
-    >>> EventLoop.flush()
-    waiting to start
-
-
-Invoking Subtasks
------------------
-
-Tasks can invoke or "call" other generators by yielding them.  For example, we
-can rewrite our example like this, for more modularity::
-
-    >>> class TaskExample(trellis.Component):
-    ...     trellis.values(
-    ...         start = False,
-    ...         stop = False
-    ...     )
-    ...
-    ...     def wait_for_start(self):
-    ...         print "waiting to start"
-    ...         while not self.start:
-    ...             yield trellis.Pause
-    ...
-    ...     def wait_for_stop(self):
-    ...         while not self.stop:
-    ...             print "waiting to stop"
-    ...             yield trellis.Pause
-    ...
-    ...     @trellis.task
-    ...     def demo(self):
-    ...         yield self.wait_for_start()
-    ...         print "starting"
-    ...         yield self.wait_for_stop()
-    ...         print "stopped"
-
-    >>> t = TaskExample()
-    >>> EventLoop.flush()
-    waiting to start
-
-    >>> t.start = True
-    >>> EventLoop.flush()
-    starting
-    waiting to stop
-
-    >>> t.stop = True
-    >>> EventLoop.flush()
-    stopped
-
-Yielding a generator from a ``@task`` causes that generator to temporarily
-replace the main generator, until the child generator returns, yields a
-non-``Pause`` value, or raises an exception.  At that point, control returns to
-the "parent" generator.  Subtasks may be nested to any depth.
-
-
-Receiving Values and Propagating Exceptions
--------------------------------------------
-
-If you are targeting Python 2.5 or higher, you don't need to do anything
-special to receive values yielded by subtasks, or to ensure that subtask
-exceptions are propagated.  You can receive values using expressions like::
-
-    result = yield someGenerator(someArgs)
-
-However, in earlier versions of Python, this syntax doesn't exist, so you must
-use the ``trellis.resume()`` function instead, e.g.::
-
-    yield someGenerator(someArgs); result = trellis.resume()
-
-If you are writing code intended to run on Python 2.3 or 2.4 (as well as 2.5),
-you should call ``trellis.resume()`` immediately after a subtask invocation
-(preferably on the same line, as shown), *even if you don't need to get the
-result*.  E.g.::
-
-    yield someGenerator(someArgs); trellis.resume()
-
-The reason you should do this is that Python versions before 2.5 do not allow
-you to pass exceptions into a generator, so the Trellis can't cause the
-``yield`` statement to propagate an error from ``someGenerator()``.  If the
-subtask raised an exception, it will silently vanish unless the ``resume()``
-function is called.
-
-The reason to put it on the same line as the yield is so that you can see the
-subtask call in the error's traceback, instead of just a line saying
-``trellis.resume()``!  (Note, by the way, that it's perfectly valid to use
-``trellis.resume()`` in code that will also run under Python 2.5; it's just
-redundant unless the code will also be used with older Python versions.)
-
-The ability to receive values from a subtask lets you create utility functions
-that wait for events to occur in some non-Trellis system.  For example, you
-could create a function like this, to let you wait for a Twisted "deferred" to
-fire::
-
-    def wait_for(deferred):
-        result = trellis.Cell(None, trellis.Pause)
-        deferred.addBoth(result.set_value)
-        while result.value is trellis.Pause:
-            yield trellis.Pause
-        if isinstance(result.value, failure.Failure):
-            try:
-                result.value.raiseException()
-            finally:
-                del result  # get rid of the traceback reference cycle
-        yield trellis.Return(result.value)
-
-You would then use it like this (Python 2.5)::
-
-    result = wait_for(someTwistedFuncReturningADeferred(...))
-
-Or like this (compatible with earlier Python versions)::
-
-    wait_for(someTwistedFuncReturningADeferred(...)); result = trellis.resume()
-
-``wait_for()`` creates a cell and adds its ``set_value()`` method as a callback
-to the deferred, to receive either a value or an error.  It then waits until
-the callback occurs, by yielding ``Pause`` objects.  If the result is a Twisted
-``Failure``, it raises the exception represented by the failure.  Otherwise,
-it wraps the result in a ``trellis.Return()`` and yields it to its calling
-task, where it will be received as the result of the ``yield`` expression
-(in Python 2.5) or of the ``trellis.resume()`` call (versions <2.5).
-
-
-Time, Tasks, and Changes
-------------------------
-
-Note, by the way, that when we say the generator above will "wait" until the
-callback occurs, we actually mean no such thing!  What *really* happens is that
-this generator yields ``Pause``, recalculation finishes normally, and control
-is returned to whatever non-Trellis code caused a recalculation to occur in
-the first place.  Then, later, when the deferred fires and a callback occurs to
-set the ``result`` cell's value, this *triggers a recalculation sweep*, in
-which the generator is resumed in order to carry out the rest of its task!
-
-When it yields the result or raises an exception, this is propagated back to
-whatever generator "called" this one, which may then go on to do other things
-with the value or exception before it pauses or returns.  The recalculation
-sweep once again finishes normally, and control is returned back to the code
-that caused the deferred to fire.
-
-Thus, "time" in the Trellis (and especially for tasks) moves forward only when
-something *changes*.  It's the setting of cell values that triggers
-recalculation sweeps, and tasks only resume during sweeps where one of their
-dependencies have changed.
-
-A task is considered to depend on any cells whose value it has read since the
-last time it (or a subtask) yielded a ``Pause``.  Each time a task pauses, its
-old dependencies are thrown out, and a new set are accumulated.
-
-A task must also ``Pause`` in order to see the effects of any changes it makes
-to cells.  For example::
-
-    >>> c = trellis.Cell(value=27)
-    >>> c.value
-    27
-
-    >>> def demo_task():
-    ...     c.value = 19
-    ...     print c.value
-    ...     yield trellis.Pause
-    ...     print c.value
-
-    >>> trellis.TaskCell(demo_task).value
-    >>> EventLoop.flush()
-    19
-
-    
-As you can see, changing the value of a cell inside a task is like changing it
-inside a ``@modifier`` or ``@action`` -- the change doesn't take effect until
-a new recalculation occurs, and the *current* recalculation can't finish until
-the task yields a ``Pause`` or returns (i.e., exits entirely).
-
-In this example, the task is resumed immediately after the pause because the
-task depended on ``c.value`` (by printing it), and its value *changed* in the
-subsequent sweep (because the task set it).  So the task was resumed
-immediately, as part of the second recalculation sweep (which happened only
-because there was a change in the first sweep).
-
-But what if a task doesn't have any dependencies?  If it doesn't depend on
-anything, how does it get resumed after a pause?  Let's see what happens::
-
-    >>> def demo_task():
-    ...     print 1
-    ...     yield trellis.Pause
-    ...     print 2
-
-    >>> trellis.TaskCell(demo_task).value
-    >>> EventLoop.flush()
-    1
-    >>> EventLoop.flush()
-    2
-
-As you can see, a task with no dependencies, (i.e., one that hasn't looked at
-any cells since its last ``Pause``), is automatically resumed.  The Trellis
-effectively pretends that the task both set and depended on an imaginary cell,
-forcing another recalculation sweep (if one wasn't already in the works due
-to other changes or the need to reset some discrete cells).  This prevents
-tasks from accidently suspending themselves indefinitely.
-
-Notice, by the way, that this makes Trellis-style multitasking rather unique
-in the world of Python event-driven systems and co-operative multitasking
-tools.  Most such systems require something like an "event loop", "reactor",
-"trampoline", or similar code that runs in some kind of loop to manage tasks
-like these.  But the Trellis doesn't need a loop of its own: it can use
-whatever loop(s) already exist in a program, and simply respond to changes as
-they occur.
-
-In fact, you can have one set of Trellis components in one thread responding to
-changes triggered by callbacks from Twisted's reactor, and another set of
-components in a different thread, being triggered by callbacks from a GUI
-event loop.  Heck, you can have them both happening in the *same* thread!  The
-Trellis really doesn't care.  (However, you can't share any trellis components
-across threads, or use them to communicate between threads.  In the future,
-the ``TrellisIO`` package will probably include mechanisms for safely
-communicating between cells in different threads.)
-
-
-Managing Activities in "Clock Time"
-===================================
-
-(NEW in 0.6a1)
-
-Real-life applications often need to work with intervals of physical or "real"
-time, not just logical "Trellis time".  In addition, they often need to manage
-sequential or simultaneous activities.  For example, a desktop application may
-have background tasks that perform synchronization, download mail, etc.  A
-server application may have logical tasks handling requests, and so on.  These
-activities may need to start or stop at various times, manage timeouts, display
-or log progress, etc.
-
-So, the ``peak.events.activity`` module includes support for time tracking as
-well as controlling activities and monitoring their progress.
-
-
-Timers and the Time Service
----------------------------
-
-The Trellis measures time using "timers".  A timer represents a moment in time,
-but you can't tell directly *what* moment it represents.  All you can do is
-measure the interval between two timers, or tell whether the moment defined by
-a timer has been reached.
-
-The "zero" timer is ``activity.EPOCH``, representing an arbitrary starting
-point in relative time::
-
-    >>> from peak.events.activity import EPOCH
-    >>> t = EPOCH
-    >>> t
-    <...activity._Timer object at ...>
-
-
-Static Time Calculations
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-As you can see, timer objects aren't very informative by themselves.  However,
-you can use subscripting to create new timers relative to an existing timer,
-and subtract timers from each other to produce an interval in seconds, e.g.::
-
-    >>> t10 = t[10]
-    >>> t10 - t
-    10
-
-    >>> t10[-10] - t
-    0
-
-    >>> t10[3] - t
-    13
-
-Timers compare equal to one another, if and only if they represent the same
-moment::
-
-    >>> t==t
-    True
-    >>> t!=t
-    False
-    >>> t10[-10] == t
-    True
-    >>> t10[-10] != t
-    False
-
-And the other comparison operators work on timers according to their relative
-positions in time, e.g.:
-
-    >>> t[-1] < t <= t[1]
-    True
-    >>> t[-1] > t[-2]
-    True
-    >>> t[-2] > t[-1]
-    False
-    >>> t[-1] >= t[-1]
-    True
-    >>> t<=t
-    True
-    >>> t<=t[1]
-    True
-    >>> t<=t[-1]
-    False
-
-
-Dynamic Time Calculations
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Of course, if arithmetic were all you could do with timers, they wouldn't be
-very useful.  Their real value comes when you perform dynamic time calculations,
-to answer questions like "How long has it been since X happened?", or "Has
-Y seconds elapsed since X happened?"  And of course, we want any rules that
-ask these questions to be recalculated if the answers change!
-
-This is where the ``activity.Time`` service comes into play.  The ``Time``
-class is a ``context.Service`` (see the Contextual docs for more details) that
-tracks the current time, and takes care of letting the Trellis know when a rule
-needs to be recalculated because of a change in the current time.
-
-By default, the ``Time`` service uses ``time.time()`` to track the current
-time, whenever a trellis value is changed.  But to get consistent timings
-while testing, we'll turn this automatic updating off::
-
-    >>> from peak.events.activity import Time
-    >>> Time.auto_update = False
-
-With auto-update off, the time will only advance if we explicitly call
-``Time.tick()`` or ``Time.advance()``.  ``tick()`` updates the current time
-to match ``time.time()``, while ``Time.advance()`` moves the time ahead by a
-specified amount (so you can run tests in "simulated time" with perfect
-repeatability).
-
-So now let's do some dynamic time calculations.  In most programs, what you
-need to know in a rule is whether a certain amount of time has elapsed
-since something has happened, or whether a certain future time has arrived.
-
-To do that, you can simply create a timer for the desired moment, and check its
-boolean (truth) value::
-
-    >>> twenty = Time[20]    # go off 20 secs. from now
-    >>> bool(twenty)         # but we haven't gone off yet
-    False
-
-    >>> Time.advance(5)
-    >>> bool(twenty)         # not time yet...
-    False
-
-    >>> Time.advance(15)     # bingo!
-    >>> bool(twenty)
-    True
-
-    >>> Time.advance(7)
-    >>> bool(twenty)    # remains true even after the exact moment has passed
-    True
-
-And of course, you can use this boolean test in a rule, to trigger some action::
-
-    >>> class AlarmClock(trellis.Component):
-    ...     trellis.values(timeout = None)
-    ...     def alert(self):
-    ...         if self.timeout:
-    ...             print "timed out!"
-    ...     alert = trellis.rule(alert)
-
-    >>> clock = AlarmClock(timeout=Time[20])
-    >>> Time.advance(15)
-    >>> Time.advance(15)
-    timed out!
-
-Notice, by the way, that the ``Time`` service can be subscripted with a value
-in seconds, to get a timer representing that many seconds from the current
-time.  (However, ``Time`` is not really a timer object, so don't try to use it
-as one!)
-
-
-Elapsed Time Tracking
-~~~~~~~~~~~~~~~~~~~~~
-
-This alarm implementation works by getting a future timer (``timeout``), and
-then "goes off" when that future moment is reached.  However, we can also
-create an "elapsed" timer, and trigger when a certain amount of time has
-passed::
-
-    >>> class Elapsed(trellis.Component):
-    ...     trellis.values(duration = 20)
-    ...     trellis.rules(has_run_for = lambda self: Time[0])
-    ...
-    ...     def alarm(self):
-    ...         if self.has_run_for[self.duration]:
-    ...             print "timed out!"
-    ...     alarm = trellis.rule(alarm)
-
-    >>> t = Elapsed()       # Capture a start time
-    >>> Time.advance(15)    # duration is 20, so no alarm yet
-
-    >>> t.duration = 10     # duration changed, and already reached
-    timed out!
-
-    >>> t.duration = 15     # duration changed, but still reached
-    timed out!
-
-    >>> t.duration = 20     # not reached yet...
-
-    >>> Time.advance(5)
-    timed out!
-
-As you can see, the ``has_run_for`` attribute is a timer that records the
-moment when the ``Elapsed`` instance is created.  The ``alarm`` rule is then
-recalculated whenever the ``duration`` changes -- or elapses.
-
-Of course, in complex programs, one usually needs to be able to measure the
-amount of time that some condition has been true (or false).  For example, how
-long a process has been idle (or busy)::
-
-    >>> from peak.events.activity import NOT_YET
-
-    >>> class IdleTimer(trellis.Component):
-    ...     trellis.values(
-    ...         idle_for = NOT_YET,
-    ...         idle_timeout = 20,
-    ...         busy = False,
-    ...     )
-    ...     trellis.rules(
-    ...         idle_for = lambda self:
-    ...             self.idle_for.begins_with(not self.busy)
-    ...     )
-    ...     def alarm(self):
-    ...         if self.idle_for[self.idle_timeout]:
-    ...             print "timed out!"
-    ...     alarm = trellis.rule(alarm)
-
-The way this code works, is that initially the ``idle_for`` timer is equal to
-the special ``NOT_YET`` value, representing a moment that will never be
-reached.
-
-The ``begins_with()`` method of timer objects takes a boolean value.  If the
-value is false, ``NOT_YET`` is returned.  If the value is true, the lesser of
-the existing timer value or ``Time[0]`` (the present moment) is returned.
-
-Thus, a statement like::
-
-    a_timer = a_timer.begins_with(condition)
-
-ensures that ``a_timer`` equals the most recent moment at which ``condition``
-was observed to become true.  (Or ``NOT_YET``, in the case where ``condition``
-is false.)
-
-So, the ``IdleTimer.alarm`` rule effectively checks whether ``busy`` has been
-false for more than ``idle_timeout`` seconds.  If ``busy`` is currently true,
-then ``self.idle_for`` will be ``NOT_YET``, and subscripting ``NOT_YET``
-always returns ``NOT_YET``.  Since ``NOT_YET`` is a moment that can never be
-reached, the boolean value of the expression is always false while ``busy``
-is true.
-
-Let's look at the ``IdleTimer`` in action::
-
-    >>> it = IdleTimer()
-    >>> it.busy = True
-    >>> Time.advance(30)    # busy for 30 seconds
-
-    >>> it.busy = False
-    >>> Time.advance(10)    # idle for 10 seconds, no timeout yet
-
-    >>> Time.advance(10)    # ...20 seconds!
-    timed out!
-
-    >>> Time.advance(15)    # idle 35 seconds, no new timeout
-
-    >>> it.busy = True      # busy again
-    >>> Time.advance(5)     # for 5 seconds...
-
-    >>> it.busy = False
-    >>> Time.advance(30)    # idle 30 seconds, timeout!
-    timed out!
-
-    >>> it.idle_timeout = 15    # already at 30, fires again
-    timed out!
-
-
-Automatically Advancing the Time
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-In our examples, we've been manually updating the time.  But if ``auto_update``
-is true, then the time automatically advances whenever a trellis value is
-changed::
-
-    >>> Time.auto_update = True
-    >>> c = trellis.Cell()
-    >>> c.value = 42
-
-    >>> now = Time[0]
-    >>> from time import sleep
-    >>> sleep(0.1)
-
-    >>> now == Time[0]  # time hasn't actually moved forward yet...
-    True
-
-    >>> c.value = 24
-    >>> now == Time[0]  # but now it has, since a recalculation occurred
-    False
-
-This ensures that any rules that use a current time value, or that are waiting
-for a timeout, will see the correct time.
-
-Note, however, that if your application doesn't change any trellis values for a
-long time, then any pending timeouts may not fire for an excessive period of
-time.  You can, however, force an update to occur by using the ``Time.tick()``
-method::
-
-    >>> now = Time[0]
-    >>> sleep(0.1)
-    >>> now == Time[0]  # time hasn't actually moved forward yet...
-    True
-    
-    >>> Time.tick()
-    >>> now == Time[0]  # but now it has!
-    False
-
-So, an application's main loop can call ``Time.tick()`` repeatedly in order to
-ensure that any pending timeouts are being fired.
-
-You can reduce the number of ``tick()`` calls significantly, however, if you
-make use of the ``next_event_time()`` method.  If there are no scheduled events
-pending, it returns ``None``::
-
-    >>> print Time.next_event_time()
-    None
-
-But if anything is waiting, like say, our ``IdleTimeout`` object from the
-previous section, it returns the relative or absolute time of the next time
-``tick()`` will need to be called::
-
-    >>> Time.auto_update = False
-    >>> it = IdleTimer(idle_timeout=30)
-
-    >>> Time.next_event_time(relative=True)
-    30.0
-
-    >>> when = EPOCH[Time.next_event_time(relative=False)]
-    >>> when - Time[0]
-    30.0
-
-    >>> Time.advance(30)
-    timed out!
-
-(We can't show the absolute time in this example, because it would change every
-time this document was run.  But we can offset it from ``EPOCH``, and then
-subtract it from the current time, to prove that it's equal to an absolute time
-30 seconds after the current time.)
-
-Armed with this method, you can now write code for your application's event
-loop that calls ``tick()`` at the appropriate interval.  You will simply need
-to define a Trellis rule somewhere that monitors the ``next_event_time()`` and
-schedules a call to ``Time.tick()`` if the next event time is not None.  You
-can use whatever scheduling mechanism your application already includes, such
-as a ``wx.Timer`` or Twisted's ``reactor.callLater``, etc.
-
-When the scheduled call to ``tick()`` occurs, your monitoring rule will be
-run again (because ``next_event_time()`` depends on the current time), thus
-repeating the cycle as often as necessary.
-
-Note, however, that your rule may be run again *before* the scheduled
-``tick()`` occurs, and so may end up scheduling extra calls to ``tick()``.
-This should be harmless, however, but if you want to avoid the repeats you can
-always write your rule so that it updates the existing scheduled call time, if
-one is pending.  (E.g. by updating the ``wx.Timer`` or changing the Twisted
-"appointment".)
-
-
-Event Loops
------------
-
-    >>> def hello(*args, **kw):
-    ...     print "called with", args, kw
-
-    >>> from peak.events.activity import EventLoop
-    >>> Time.auto_update = False    # test mode
-
-    >>> EventLoop.call(hello, 1, a='b')
-    >>> EventLoop.call(hello, 2)
-    >>> EventLoop.call(hello, this=3)
-    >>> EventLoop.call(EventLoop.stop)
-
-    >>> EventLoop.run()
-    called with (1,) {'a': 'b'}
-    called with (2,) {}
-    called with () {'this': 3}
-
-    >>> EventLoop.stop()
-    Traceback (most recent call last):
-      ...
-    AssertionError: EventLoop isn't running    
-
-    >>> EventLoop.call(EventLoop.run)
-    >>> EventLoop.call(hello, 4)
-    >>> EventLoop.call(EventLoop.stop)
-    >>> EventLoop.run()
-    Traceback (most recent call last):
-      ...
-    AssertionError: EventLoop is already running    
-
-    >>> it = IdleTimer(idle_timeout=5)
-    >>> EventLoop.run()
-    called with (4,) {}
-    timed out!
-
-
 Garbage Collection
 ==================
 
 Cells keep strong references to all of the cells whose values they accessed
 during rule calculation, and weak references to all of the cells that accessed
-them.  This ensures that as long as an observer exists, its most-recently
-observed subject(s) will also continue to exist.
+them.  This ensures that as long as a listener exists, its most-recently
+read subject(s) will also continue to exist.
 
 Cells whose rules are effectively methods (i.e., cells that represent component
 attributes) also keep a strong reference to the object that owns them, by
 way of the method's ``im_self`` attribute.  This means that as long as some
-attribute of a component is being observed, the component will continue to
-exist.
+attribute of a component is being observed, the whole component will continue
+to exist.
 
 In addition, a component's ``__cells__`` dictionary keeps a reference to all
 its cells, creating a reference cycle between the cells and the component.
-Thus, Component instances can only be reclaimed by Python's cycle collector,
+Thus, ``Component`` instances can only be reclaimed by Python's cycle collector,
 and are not destroyed as soon as they go out of scope.  You should therefore
 avoid giving Component objects a ``__del__`` method, and should explicitly
 dispose of any resources that you want to reclaim early.
@@ -2498,18 +1834,18 @@ The Implementation
 ==================
 
 Ken Tilton's "Cells" library for Common Lisp inspired the implementation of
-the Trellis.  While Tilton had never heard of Gelernter's Trellis, he did
-come to see the value of having synchronous updates, like the "sweeps" of
-Gelernter's design, and combined them with automatic dependency detection to
-create his "Cells" library.
+the Trellis.  While Tilton had never heard of Gelernter's Trellis, he
+independently discovered the value of having synchronous updates, like the
+"sweeps" of Gelernter's design, and combined them with automatic dependency
+detection to create his "Cells" library.
 
 I heard about this library only because Google sponsored a "Summer of Code"
 project to port Cells to Python - a project that produced the PyCells
 implementation.  My implementation, however, is not a port but a re-visioning
 based on native Python idioms and extended to handle mutually recursive rules,
-and various other features that do not precisely map onto the features of
-Cells, PyCells, or other Python frameworks inspired by Cells (such as
-"Cellulose").
+side-effects, rollback, and various other features that do not precisely map
+onto the features of Cells, PyCells, or other Python frameworks inspired by
+Cells (such as "Cellulose").
 
 While the first very rough drafts of this package were done in 2006 on my own
 time, virtually all of the work since has been generously funded by OSAF, the
@@ -2531,37 +1867,18 @@ Open Issues
     from a rule via an output queue.  That way, a discrete rule or task's
     recalculation can be separated from mere outputting of queued values.
 
-  * Errors in rules can currently clog up the processing of rules that observe
-    them.  Ideally, errors should cause a rollback of the entire recalculation,
-    or at least the parts that were affected by an error, so that the next
-    recalculation will begin from the pre-error state.
-
   * Currently, there's no protection against accessing Cells from other
     threads, nor support for having different logical tasks in the same thread
     with their own contexts, services, etc.  This should be fixed by using
     the "Contextual" library to manage thread-local (and task-local) state for
     the Trellis, and by switching to the appropriate ``context.State`` whenever
-    non-rule/non-modifier code tries to read or write a cell.  If combined with
-    a lockable cell controller, and the rollback capability mentioned above,
-    this would actually allow the Trellis to become an STM system -- a Software
-    Transactional Memory.
-
-  * There should probably be a way to tell if a Cell ``.has_listeners()`` or
-    ``.has_dependencies()``.  This will likely become important for TrellisIO,
-    if not TrellisDB.
+    non-rule/non-modifier code tries to read or write a cell.
 
   * There should probably be an easier way to reference cells directly, instead
     of using Cells(ob)['name'] -- perhaps a ``.link`` property, similar to the
     ``.future`` of "todo" cells, would make this easier.
 
-  * Currently, you can set the value of a new cell more than once, to different
-    values, as long as it hasn't been read yet.  This provides some additional
-    flexibility to constructors, but isn't really documented or fully
-    specified yet.
-
-  * The ``poll()`` and ``repeat()`` functions, as well as the
-    ``.ensure_recalculation()`` method of cells, are undocumented in this
-    release.
+  * The ``poll()`` and ``repeat()`` functions are undocumented in this release.
 
 TrellisDB
   * A system for processing relational-like records and "active queries" mapped
@@ -2576,8 +1893,6 @@ TrellisUI
     "GridBagSizer" layouts.
 
 TrellisIO
-  * Time service & timestamp rules
-
   * IO events
 
   * Cross-thread bridge cells

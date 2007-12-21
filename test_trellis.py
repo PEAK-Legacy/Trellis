@@ -1137,7 +1137,7 @@ class TestTasks(unittest.TestCase):
 
             def throw(self, typ, val, tb):
                 log.append(typ)
-                log.append(type(val))
+                log.append(val.__class__)   # type(val) is instance in Py<2.5
                 log.append(type(tb))
                 raise StopIteration                
 
@@ -1163,9 +1163,9 @@ class TestTasks(unittest.TestCase):
 def additional_tests():
     import doctest, sys
     files = [
-        'README.txt', 'STM-Observer.txt', 'Collections.txt', 'Internals.txt',
-        'Specification.txt',
-    ][(sys.version<'2.4')*3:]   # README.txt uses decorator syntax
+        'README.txt', 'STM-Observer.txt', 'Activity.txt', 'Collections.txt',
+        'Internals.txt', 'Specification.txt',
+    ][(sys.version<'2.4')*4:]   # README.txt uses decorator syntax
     return doctest.DocFileSuite(
         optionflags=doctest.ELLIPSIS|doctest.NORMALIZE_WHITESPACE, *files
     )

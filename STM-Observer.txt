@@ -122,7 +122,7 @@ re-raised::
     ... except TypeError:
     ...     print "caught exception"
     Manager 6 entering
-    Manager 6 exiting <type '...TypeError'> Testing! <traceback object...>
+    Manager 6 exiting ...TypeError... Testing! <traceback object...>
     caught exception
 
 The ``__exit__()`` method should not raise an error.  Also note that, unlike
@@ -152,7 +152,7 @@ and the exception will be reraised::
     Manager 8 entering
     Manager 8 exiting None None None
     Manager error exiting None None None
-    Manager 7 exiting <type '...RuntimeError'> Haha! <traceback object...>
+    Manager 7 exiting ...RuntimeError... Haha! <traceback object...>
     caught exception
 
 In other words, all context managers are guaranteed to have their ``__exit__``
@@ -325,8 +325,8 @@ a chance to run:
 Logged Setattr
 --------------
 
-As a convenience, you can use the ``setattr()`` method of history objects to
-automatically log an undo function to restore the old value of the attribute
+As a convenience, you can use the ``change_attr()`` method of history objects
+to automatically log an undo function to restore the old value of the attribute
 being set::
 
     >>> class SomeObject:
