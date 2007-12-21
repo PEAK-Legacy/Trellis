@@ -39,6 +39,11 @@ class UndirtyListener(TestListener):
         return False
 
 
+try:
+    set
+except NameError:
+    from sets import Set as set
+
 if wx:
     class TestWxEventLoop(EventLoopTestCase):
         def configure_context(self):
@@ -59,11 +64,6 @@ if wx:
 
             # XXX this should test timing stuff, but the only way to do that
             #     is with a wx mock, which I haven't time for as yet.
-
-
-
-
-
 
 
 

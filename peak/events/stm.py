@@ -80,14 +80,55 @@ class AbstractListener(object):
 
 
 
-class Link(weakref.ref):
+# Python 2.3 Compatibility
+
+try:
+    class Link(weakref.ref):
+        pass
+
+except TypeError:
+
+    class link_base(object):
+        __slots__ = 'weakref'
+
+        def __new__(cls, ob, callback):
+            self = object.__new__(cls)
+            self.weakref = weakref.ref(ob, lambda r: callback(self))
+            return self
+
+        def __call__(self):
+            return self.weakref()
+
+else:
+    link_base = weakref.ref
+
+
+try:
+    from threading import local
+except ImportError:
+    from _threading_local import local
+    threading.local = local
+
+try:
+    set
+except NameError:
+    from sets import Set as set
+
+
+
+
+
+
+
+
+class Link(link_base):
     """Dependency link"""
     __slots__ = [
         'subject','next_subject','prev_subject','next_listener','prev_listener'
     ]
 
     def __new__(cls, subject, listener):
-        self = weakref.ref.__new__(Link, listener, _unlink_fn)
+        self = link_base.__new__(Link, listener, _unlink_fn)
         self.subject = self.prev_listener = subject
         self.prev_subject = None    # listener link is via weak ref
         nxt = self.next_subject = listener.next_subject

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Distutils setup file"""
-import ez_setup
+import sys, ez_setup
 ez_setup.use_setuptools()
 from setuptools import setup
 
@@ -21,7 +21,6 @@ def get_description():
         lines.append(line)
     f.close()
     return ''.join(lines)
-
 setup(
     name=PACKAGE_NAME,
     version=PACKAGE_VERSION,
@@ -37,5 +36,6 @@ setup(
     install_requires = [
         'SymbolType>=1.0', 'AddOns>=0.6', 'DecoratorTools>=1.6',
         'Contextual>=0.7a1dev-r2410,==dev', 'Extremes>=1.1',
-    ], tests_require = ['mocker>=0.9.2']
+    ], tests_require = ['mocker>=0.9.2'],
+    py_modules = ['_threading_local'][:sys.version<'2.4']
 )
