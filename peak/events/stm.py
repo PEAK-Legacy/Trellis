@@ -203,14 +203,6 @@ class STMHistory(object):
         return len(self.undo)
 
 
-    def rollback_to(self, sp=0):
-        """Rollback to the specified savepoint"""
-        assert self.active, "Can't rollback without active history"
-        undo = self.undo; self.undoing = True
-        try:
-                 while len(undo) > sp: f, a = undo.pop(); f(*a)
-        finally: self.undoing = False
-
     def cleanup(self, typ=None, val=None, tb=None):
         # Exit the processing loop, unwinding managers
         assert self.active, "Can't exit when inactive"
@@ -249,6 +241,25 @@ class STMHistory(object):
         self.on_undo(setattr, ob, attr, getattr(ob, attr))
         setattr(ob, attr, val)
 
+
+
+
+    def rollback_to(self, sp=0):
+        """Rollback to the specified savepoint"""
+        assert self.active, "Can't rollback without active history"
+        undo = self.undo
+        self.undoing = True
+        rb = self.rollback_to
+        try:
+            while len(undo) > sp:
+                f, a = undo.pop()
+                if f==rb and a:
+                    sp = min(sp, a[0])
+                else:
+                    f(*a)
+        finally:
+            self.undoing = False
+
     def on_commit(self, func, *args):
         """Call `func(*args)` if atomic operation is committed"""
         assert self.active, "Not in an atomic operation"
@@ -274,20 +285,10 @@ class STMHistory(object):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
 class Controller(STMHistory):
     """STM History with support for subjects, listeners, and queueing"""
-    last_listener = current_listener = last_notified = last_save = None
+
+    current_listener = destinations = routes = None
     readonly = False
 
     def __init__(self):
@@ -298,33 +299,39 @@ class Controller(STMHistory):
         self.layers = []    # heap of layer numbers
         self.queues = {}    # [layer]    -> dict of listeners to be run
         self.to_retry = {}
-        from peak.events.trellis import Value; self.pulse = Value(0)
+
+        from peak.events.trellis import Value
+        self.pulse = Value(0)
+
     def cleanup(self, *args):
         try:
             self.has_run.clear()
             return super(Controller, self).cleanup(*args)
         finally:
-            self.current_listener = self.last_listener = None
-            self.last_notified = self.last_save = None
+            self.current_listener = None
 
     def _retry(self):
-        try:    # undo back through listener, watching to detect cycles
-            todo = self.to_retry.copy(); destinations = set(todo)
-            routes = {} # tree of rules that (re)triggered the original listener
-            while todo:
-                this = self.last_listener
-                if self.last_notified:
-                    via = destinations.intersection(self.last_notified)
-                    if via:
-                        routes[this] = via; destinations.add(this)
-                self.rollback_to(self.last_save)
-                if this in todo: del todo[this]
+        try:
+            # undo back through listeners, watching to detect cycles
+            self.destinations = set(self.to_retry)
+            self.routes = {} # tree of rules that (re)triggered retry targets
+            self.rollback_to(min([self.has_run[r] for r in self.to_retry]))
             for item in self.to_retry:
-                if item in routes: raise CircularityError(routes)
+                if item in self.routes:
+                    raise CircularityError(self.routes)
             else:
                 map(self.schedule, self.to_retry)
         finally:
             self.to_retry.clear()
+            self.destinations = self.routes = None
+
+
+    def _unrun(self, listener, notified):
+        destinations = self.destinations
+        if destinations is not None:
+            via = destinations.intersection(notified)
+            if via:
+                self.routes[listener] = via; destinations.add(listener)
 
     def run_rule(self, listener, initialized=True):
         """Run the specified listener"""
@@ -343,12 +350,9 @@ class Controller(STMHistory):
                     self._process_reads(listener, initialized)
                 finally:
                     self.reads = old_reads
-
             else:
                 if initialized:
-                    self.change_attr(self, 'last_save', self.savepoint())
-                    self.change_attr(self, 'last_listener', listener)
-                    self.has_run[listener] = listener
+                    self.has_run[listener] = self.savepoint()
                     self.on_undo(self.has_run.pop, listener, None)
 
                 try:
@@ -363,28 +367,24 @@ class Controller(STMHistory):
             self.current_listener = old
             self.readonly = False
 
-
-
-
-
     def _process_writes(self, listener):
         #
         # Remove changed items from self.writes and notify their listeners,
-        # keeping a record in self.last_notified so that we can figure out
-        # later what caused a cyclic dependency (if one happens).
+        # and setting up an undo action to track this listener's participation
+        # in any cyclic dependency that might occur later.
         #
         notified = {}
-        self.change_attr(self, 'last_notified', notified)
         writes = self.writes
         layer = listener.layer
-        has_run = self.has_run
         while writes:
             subject, writer = writes.popitem()
             for dependent in subject.iter_listeners():
-                if has_run.get(dependent) is not listener:
+                if dependent is not listener:
                     if dependent.dirty():
                         self.schedule(dependent, layer, writer)
                         notified[dependent] = 1
+        if notified:
+            self.on_undo(self._unrun, listener, notified)
 
     def _process_reads(self, listener, undo=True):
         #
@@ -406,7 +406,7 @@ class Controller(STMHistory):
         while subjects:
             link = Link(subjects.popitem()[0], listener)
             if undo: self.undo.append((link.unlink, ()))
-            
+
 
     def schedule(self, listener, source_layer=None, writer=None):
         """Schedule `listener` to run during an atomic operation
@@ -430,7 +430,7 @@ class Controller(STMHistory):
             new = source_layer + 1
 
         if listener in self.has_run:
-            self.to_retry[self.has_run[listener]]=1
+            self.to_retry[listener]=1
 
         q = get(old)
         if q and listener in q:

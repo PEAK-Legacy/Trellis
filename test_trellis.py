@@ -4,7 +4,7 @@ from peak.events.activity import EventLoop, TwistedEventLoop, Time, NOT_YET
 from peak.events import trellis, stm
 from peak.util.decorators import rewrap, decorate as d
 from peak.util.extremes import Max
-import unittest, heapq, mocker, types
+import unittest, heapq, mocker, types, sys
 
 try:
     import testreactor
@@ -218,7 +218,7 @@ class TestController(unittest.TestCase):
         # Verify correct cleanup in all scenarios
         for k,v in dict(
             undo=[], managers={}, queues={}, layers=[], reads={}, writes={},
-            has_run={}, last_listener=None, last_notified=None, last_save=None,
+            has_run={}, destinations=None, routes=None,
             current_listener=None, readonly=False, in_cleanup=False,
             active=False, at_commit=[], to_retry={}
         ).items():
@@ -344,10 +344,9 @@ class TestController(unittest.TestCase):
         sp = self.ctrl.savepoint(); self.ctrl.has_run[self.t1] = self.t1
         self.ctrl._process_writes(self.t1)
         # Only t0 is notified, not t1, since t1 is the listener
-        self.assertEqual(self.ctrl.last_notified, {self.t0: 1})
         self.assertEqual(self.ctrl.queues, {2: {self.t0:1}})
         self.ctrl.rollback_to(sp)
-        self.assertEqual(self.ctrl.last_notified, None)
+
 
     d(a)
     def testDependencyUpdatingAndUndo(self):
@@ -364,9 +363,6 @@ class TestController(unittest.TestCase):
         self.ctrl.rollback_to(sp)
         self.assertEqual(list(self.t0.iter_subjects()), [s3, self.s1])
 
-
-
-
     def runAs(self, listener, rule, initialized=True):
         listener.run = rule
         self.ctrl.run_rule(listener, initialized)
@@ -375,35 +371,21 @@ class TestController(unittest.TestCase):
     def testIsRunningAndHasRan(self):
         def rule():
             self.assertEqual(self.ctrl.current_listener, self.t1)
-            self.assertEqual(self.ctrl.last_listener, self.t1)
-            self.assertEqual(self.ctrl.has_run, {self.t1: self.t1})
+            self.assertEqual(self.ctrl.has_run, {self.t1: 0})
         sp = self.ctrl.savepoint()
         self.runAs(self.t1, rule)
-        self.assertEqual(self.ctrl.last_save, sp)
         self.assertEqual(self.ctrl.current_listener, None)
-        self.assertEqual(self.ctrl.last_listener, self.t1)
-        self.assertEqual(self.ctrl.has_run, {self.t1: self.t1})
-        self.ctrl.rollback_to(sp)   # should clear last_listener, last_save
+        self.assertEqual(self.ctrl.has_run, {self.t1: 0})
 
     d(a)
     def testIsRunningButHasNotRan(self):
         def rule():
             self.assertEqual(self.ctrl.current_listener, self.t1)
-            self.assertEqual(self.ctrl.last_listener, None)
             self.assertEqual(self.ctrl.has_run, {})
         sp = self.ctrl.savepoint()
         self.runAs(self.t1, rule, False)    # uninit'd rule
-        self.assertEqual(self.ctrl.last_save, None)
         self.assertEqual(self.ctrl.current_listener, None)
-        self.assertEqual(self.ctrl.last_listener, None)
         self.assertEqual(self.ctrl.has_run, {})
-        self.ctrl.rollback_to(sp)   # should clear last_listener, last_save
-
-    d(a)
-    def testClearLastListener(self):
-        self.runAs(self.t1, lambda:1)
-        self.assertEqual(self.ctrl.last_listener, self.t1)
-        # last_listener should be cleared by cleanup()
 
     d(a)
     def testScheduleUndo(self):
@@ -412,6 +394,10 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
         self.ctrl.rollback_to(sp)
         self.assertEqual(self.ctrl.queues, {})
+
+
+
+
 
 
 
@@ -435,7 +421,6 @@ class TestController(unittest.TestCase):
         self.runAs(self.t1, rule)
         # Only t0 is notified, not t1, since t1 is the listener & t3 is !dirty
         self.assertEqual(self.ctrl.writes, {})
-        self.assertEqual(self.ctrl.last_notified, {self.t0: 1})
         self.assertEqual(self.ctrl.queues, {2: {self.t0:1}})
         self.ctrl.cancel(self.t0)
 
@@ -461,6 +446,7 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.readonly, False)
         self.runAs(self.t0, rule)
         self.assertEqual(self.ctrl.readonly, False)
+
 
 
     d(a)
@@ -508,17 +494,16 @@ class TestController(unittest.TestCase):
     def testSimpleRetry(self):
         def rule():
             pass
-        sp = self.ctrl.savepoint()
         self.runAs(self.t0, rule)
         self.runAs(self.t1, rule)
         self.runAs(self.t2, rule)
+        self.assertEqual(set(self.ctrl.has_run),set([self.t0,self.t1,self.t2]))
         self.ctrl.to_retry[self.t1]=1
-        self.ctrl._retry(); self.ctrl.to_retry.clear()
-        self.assertEqual(self.ctrl.last_listener, self.t0)
-        self.assertEqual(self.ctrl.last_save, sp)
+        self.ctrl._retry()
+        self.assertEqual(set(self.ctrl.has_run), set([self.t0]))
         self.ctrl.to_retry[self.t0]=1
-        self.ctrl._retry(); self.ctrl.to_retry.clear()
-        self.assertEqual(self.ctrl.last_save, None)
+        self.ctrl._retry()
+
 
     d(a)
     def testNestedNoRetry(self):
@@ -530,19 +515,10 @@ class TestController(unittest.TestCase):
         self.runAs(self.t0, rule0)
         self.ctrl.schedule(self.t1)
         self.assertEqual(self.ctrl.to_retry, {})
-        self.assertEqual(self.ctrl.last_listener, self.t0)
-        self.assertEqual(self.ctrl.to_retry, {})
+        self.assertEqual(
+            set(self.ctrl.has_run), set([self.t0, self.t2])
+        )
         self.assertEqual(self.ctrl.queues, {1: {self.t1:1}})
-
-
-
-
-
-
-
-
-
-
 
 
     def testRunScheduled(self):
@@ -552,6 +528,7 @@ class TestController(unittest.TestCase):
             self.ctrl.schedule(self.t1)
         self.ctrl.atomically(go)
         self.assertEqual(log, [True])
+
 
 
     def testRollbackReschedules(self):
@@ -579,13 +556,6 @@ class TestController(unittest.TestCase):
         self.ctrl.atomically(self.ctrl.schedule, self.t0)
         self.assertEqual(log, [True])
 
-
-
-
-
-
-
-
     d(a)
     def testNotifyOnChange(self):
         stm.Link(self.s2, self.t2)
@@ -596,6 +566,11 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
         self.ctrl.cancel(self.t2)
         self.ctrl.writes.clear()
+
+
+
+
+
 
     def testCommitCanLoop(self):
         log=[]
@@ -614,36 +589,47 @@ class TestController(unittest.TestCase):
         self.ctrl.on_undo(undo)
         self.ctrl.rollback_to(0)
 
+    d(a)
+    def testReentrantRollbackToMinimumTarget(self):
+        sp = self.ctrl.savepoint()
+        # these 2 rollbacks will be ignored, since they target a higher sp.
+        # note that both are needed for testing, as one is there to potentially
+        # set a new target, and the other is there to make the offset wrong if
+        # the rollback stops prematurely.
+        self.ctrl.on_undo(self.ctrl.rollback_to, sp+100)
+        self.ctrl.on_undo(self.ctrl.rollback_to, sp+100)
+        sp2 = self.ctrl.savepoint()
 
+        # ensure that there's no way this test can pass unless rollback_to
+        # notices re-entrant invocations (because it would overflow the stack)
+        for i in range(sys.getrecursionlimit()*2):
+            # request a rollback all the way to 0; this target should be used
+            # in place of the sp2 target or sp+100 targets, since it will be
+            # the lowest target encountered during the rollback.
+            self.ctrl.on_undo(self.ctrl.rollback_to, sp)
 
-
-
-
-
-
-
-
-
+        self.ctrl.rollback_to(sp2) # ask to rollback to posn 2
+        self.assertEqual(self.ctrl.savepoint(), sp)  # but should rollback to 0
 
 
 
     d(a)
     def testNestedRule(self):
         def rule1():
-            self.assertEqual(self.ctrl.last_listener, self.t1)
+            self.assertEqual(set(self.ctrl.has_run), set([self.t0, self.t1]))
             self.assertEqual(self.ctrl.current_listener, self.t1)
             self.ctrl.used(self.s1)
             self.ctrl.changed(self.s2)
             self.assertEqual(self.ctrl.reads, {self.s1:1})
             self.assertEqual(self.ctrl.writes, {self.s2:self.t1})
             self.runAs(self.t2, rule2, False)
-            self.assertEqual(self.ctrl.last_listener, self.t1)
+            self.assertEqual(set(self.ctrl.has_run), set([self.t0, self.t1]))
             self.assertEqual(self.ctrl.current_listener, self.t1)
             self.assertEqual(self.ctrl.reads, {self.s1:1})
             self.assertEqual(self.ctrl.writes, {self.s2:self.t1, s3:self.t2})
 
         def rule2():
-            self.assertEqual(self.ctrl.last_listener, self.t1)
+            self.assertEqual(set(self.ctrl.has_run), set([self.t0, self.t1]))
             self.assertEqual(self.ctrl.current_listener, self.t2)
             self.assertEqual(self.ctrl.reads, {})
             self.assertEqual(self.ctrl.writes, {self.s2:self.t1})
@@ -656,13 +642,13 @@ class TestController(unittest.TestCase):
         s3 = TestSubject(); s3.name = 's3'
         self.runAs(self.t0, rule0)
         self.runAs(self.t1, rule1)
-        self.assertEqual(self.ctrl.has_run,
-            {self.t1:self.t1, self.t0: self.t0}  # t2 was new, so doesn't show
+        self.assertEqual(
+            set(self.ctrl.has_run),
+            set([self.t1, self.t0])  # t2 was new, so doesn't show
         )
         self.assertEqual(list(self.t1.iter_subjects()), [self.s1])
         self.assertEqual(list(self.t2.iter_subjects()), [self.s2])
-        self.ctrl.rollback_to(self.ctrl.last_save)  # should undo both t1/t2
-        self.assertEqual(self.ctrl.last_listener, self.t0)
+        self.ctrl.rollback_to(self.ctrl.has_run[self.t1])  # should undo both t1/t2
 
 
 
