@@ -1,7 +1,7 @@
 from test_sets import *
 from peak import context
 from peak.events.activity import EventLoop, TwistedEventLoop, Time, NOT_YET
-from peak.events import trellis, stm
+from peak.events import trellis, stm, collections
 from peak.util.decorators import rewrap, decorate as d
 from peak.util.extremes import Max
 import unittest, heapq, mocker, types, sys
@@ -896,6 +896,133 @@ class TestCells(mocker.MockerTestCase):
 
 
 
+
+
+
+
+    d(a)
+    def testTodoRollbackFuture(self):
+        sp = self.ctrl.savepoint()
+        tv = trellis.TodoValue(dict)
+        self.assertEqual(tv._savepoint, None)
+        tv.get_future()[1] = 2
+        self.assertEqual(tv._savepoint, sp)
+        sp2 = self.ctrl.savepoint()
+        tv.get_future()[2] = 3
+        self.assertEqual(tv._savepoint, sp)
+        self.ctrl.rollback_to(sp2)
+        self.assertEqual(self.ctrl.savepoint(), sp)
+        self.assertEqual(tv._savepoint, None)
+        
+    d(a)
+    def testTodoRollbackSet(self):
+        sp = self.ctrl.savepoint()
+        tv = trellis.TodoValue(dict)
+        self.assertEqual(tv._savepoint, None)
+        tv.get_future()[1] = 2
+        self.assertEqual(tv._savepoint, sp)
+        sp2 = self.ctrl.savepoint()
+        tv.value = {2:3}
+        self.assertEqual(tv._savepoint, sp)
+        self.ctrl.rollback_to(sp2)
+        self.assertEqual(self.ctrl.savepoint(), sp)
+        self.assertEqual(tv._savepoint, None)
+        
+    d(a)
+    def testFullRollbackList(self):
+        l = trellis.List()
+        sp = self.ctrl.savepoint()
+        l.append(1)
+        self.ctrl.on_undo(lambda:None)
+        sp2 = self.ctrl.savepoint()
+        l.append(2)
+        self.ctrl.rollback_to(sp2)
+        self.assertEqual(self.ctrl.savepoint(), sp)
+
+
+
+    d(a)
+    def testFullRollbackDict(self):
+        d = trellis.Dict()
+        sp = self.ctrl.savepoint()
+        d[1] = 2
+        self.ctrl.on_undo(lambda:None)
+        sp2 = self.ctrl.savepoint()
+        d[2] = 3
+        self.ctrl.rollback_to(sp2)
+        self.assertEqual(self.ctrl.savepoint(), sp)
+
+    d(a)
+    def testFullRollbackSet(self):
+        s = trellis.Set()
+        sp = self.ctrl.savepoint()
+        s.add(1)
+        self.ctrl.on_undo(lambda:None)
+        sp2 = self.ctrl.savepoint()
+        s.add(2)
+        self.ctrl.rollback_to(sp2)
+        self.assertEqual(self.ctrl.savepoint(), sp)
+
+    def run_modifier_and_rule(self, func, rule):
+        d(self.ctrl.atomically)
+        def go():
+            self.ctrl.schedule(trellis.Cell(rule))
+            func.sp = self.ctrl.savepoint()
+            trellis.modifier(func)()
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def testDictUndo(self):
+        def do_it():
+            dd[1] = 2
+            self.ctrl.on_undo(lambda:None)
+            do_it.sp2 = self.ctrl.savepoint()
+            dd[4] = 6
+            del dd[5]
+        def rule():
+            if dict(dd)=={4:5, 5:6}: return
+            self.assertEqual(dict(dd), {1:2, 4:6})
+            self.ctrl.rollback_to(do_it.sp2)
+            self.assertEqual(self.ctrl.savepoint(), do_it.sp)
+        dd = trellis.Dict()
+        dd[4] = 5
+        dd[5] = 6
+        self.assertEqual(dict(dd), {4:5, 5:6})
+        self.run_modifier_and_rule(do_it, rule)
+        self.assertEqual(dict(dd), {4:5, 5:6})
+
+    def testSetAndObservingUndo(self):
+        def do_it():
+            s.add(1)
+            self.ctrl.on_undo(lambda:None)
+            do_it.sp2 = self.ctrl.savepoint()
+            s.add(3)
+            s.remove(4)
+        def rule():
+            if set(s)==set([4,5]): return
+            self.assertEqual(set(s), set([1,3,5]))
+            self.ctrl.rollback_to(do_it.sp2)
+            self.assertEqual(self.ctrl.savepoint(), do_it.sp)
+        s = trellis.Set([])
+        o = collections.Observing(keys=s)
+        s.update([4,5])
+        self.assertEqual(set(s), set([4,5]))
+        self.assertEqual(set(o._watching), set([4,5]))
+        self.run_modifier_and_rule(do_it, rule)
+        self.assertEqual(set(s), set([4,5]))
+        self.assertEqual(set(o._watching), set([4,5]))
+
+            
 
 
 

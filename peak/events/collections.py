@@ -7,11 +7,6 @@ __all__ = [
     'SortedSet', 'SubSet', 'Observing',
 ]
 
-decorators.struct()
-def _sort_state(items=None, key=None, reverse=False, changes=()):
-    """Data structure to hold SortedSet state"""
-    return items, key, reverse, changes
-
 
 class SubSet(trellis.Set):
     """Set that's constrained to be a subset of another set"""
@@ -39,16 +34,19 @@ class SubSet(trellis.Set):
 
 
 
+
+
+
+
+
 class Observing(trellis.Component):
     """Monitor a set of keys for changes"""
-
     trellis.values(
         lookup_func = lambda x:x,
         changes = {},
         watched_values = ({}, {}),
         _watching = None
     )
-
     keys = trellis.rule(lambda self: trellis.Set())
 
     decorators.decorate(trellis.rule)
@@ -56,10 +54,12 @@ class Observing(trellis.Component):
         cells = self._watching or {}
         for k in self.keys.removed:
             if k in cells:
+                trellis.on_undo(cells.__setitem__, k, cells[k])
                 del cells[k]
                 trellis.dirty()
         lookup = self.lookup_func
         for k in self.keys.added:
+            trellis.on_undo(cells.pop, k, None)
             cells[k] = trellis.Cell(instancemethod(lookup, k, type(k)))
             trellis.dirty()
         return cells
@@ -85,16 +85,14 @@ class SortedSet(trellis.Component):
 
     trellis.values(
         data = None,
-        state = _sort_state(),
         sort_key  = lambda x:x,  # sort on the object
-        changes = [],
-        reverse = False
+        reverse = False,
+        items = None,
+        old_key = None,
+        old_reverse = None
     )
-    trellis.rules(
-        data = lambda self: trellis.Set(),
-        items = lambda self: self.state.items,
-    )
-    changes = trellis.discrete(lambda self: self.state.changes)
+    data    = trellis.rule(lambda self: trellis.Set())
+    changes = trellis.receiver([])
 
     def __getitem__(self, key):
         if self.reverse:
@@ -106,17 +104,19 @@ class SortedSet(trellis.Component):
 
     decorators.decorate(trellis.rule)
     def state(self):
-        state, key, reverse = self.state, self.sort_key, self.reverse
-        data = state.items
-        if key != state.key or reverse != state.reverse:
-            if key != state.key or data is None:
+        key, reverse = self.sort_key, self.reverse
+        data = self.items
+        if key != self.old_key or reverse != self.old_reverse:
+            if data is None or key != self.old_key:
                 data = [(key(ob),ob) for ob in self.data]
                 data.sort()
+                self.items = data
             size = len(self.data)
-            changes = [(0, size, size)]
+            self.changes = [(0, size, size)]
+            self.old_key = key
+            self.old_reverse = reverse
         else:
-            changes = self.compute_changes(key, data, reverse)
-        return _sort_state(data, key, reverse, changes)
+            self.changes = self.compute_changes(key, data, reverse)
 
     def __repr__(self):
         return repr(list(self))

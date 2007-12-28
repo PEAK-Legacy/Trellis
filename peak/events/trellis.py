@@ -878,8 +878,8 @@ class TodoValue(Value):
         lock(self)
         if self._savepoint is None:
             change_attr(self, '_savepoint', savepoint())
-        #else:
-        #    on_undo(rollback_to, self._savepoint)
+        else:
+            on_undo(rollback_to, self._savepoint)
         super(TodoValue, self).set_value(value)
 
     value = property(Value.get_value.im_func, set_value)
@@ -892,8 +892,8 @@ class TodoValue(Value):
         if self._savepoint is None:
             self.value = self.rule()
             changed(self)
-        #else:
-        #    on_undo(rollback_to, self._savepoint)
+        else:
+            on_undo(rollback_to, self._savepoint)
         return self._value
 
     def _finish(self):
@@ -913,14 +913,10 @@ class Dict(UserDict.IterableUserDict, Component):
     dictionary in any way (e.g. gets items, iterates, checks length, etc.)
     will be recalculated if the dictionary is changed in any way.
 
-    Any changes that happen to the dictionary are made "in the future", but all
-    read operations are done "in the present" -- so you can't see the effect of
-    any changes until the next Trellis recalculation.
-
-    Note that this means operations like pop(), popitem(), and setdefault()
-    that both read and write in the same operation are NOT supported, since
-    reading must always happen in the present, whereas writing is done to the
-    future version of the dictionary.
+    Note that this operations like pop(), popitem(), and setdefault() that both
+    read and write in the same operation are NOT supported, since reading must
+    always happen in the present, whereas writing is done to the future version
+    of the dictionary.
     """
     added = todo(lambda self: {})
     deleted = todo(lambda self: {})
@@ -941,16 +937,26 @@ class Dict(UserDict.IterableUserDict, Component):
     def get(self, key, failobj=None):
         return self.data.get(key, failobj)
 
+    def __hash__(self):
+        raise TypeError
+
+
     decorators.decorate(rule)    
     def data(self):
         data = self.data
         if data is None:
             data = {}
+        elif self.deleted or self.changed:
+            old = [(k,data[k]) for k in self.deleted if k in data]
+            old += [(k,data[k]) for k in self.changed if k in data]
+            on_undo(data.update, dict(old))
+        pop = data.pop
         if self.deleted:
             dirty()
             for key in self.deleted:
-                if key in data: del data[key]   # XXX
+                pop(key, None)
         if self.added:
+            for key in self.added: on_undo(pop, key, None)
             dirty(); data.update(self.added)
         if self.changed:
             dirty(); data.update(self.changed)
@@ -1005,21 +1011,15 @@ class Dict(UserDict.IterableUserDict, Component):
 
     def setdefault(self, key, failobj=None):
         """setdefault() is disallowed because it 'reads the future'"""
-        raise InputConflict(
-            "Can't read and write in the same operation"
-        )
+        raise InputConflict("Can't read and write in the same operation")
+
     def pop(self, key, *args):
         """The pop() method is disallowed because it 'reads the future'"""
-        raise InputConflict(
-            "Can't read and write in the same operation"
-        )
+        raise InputConflict("Can't read and write in the same operation")
+
     def popitem(self):
         """The popitem() method is disallowed because it 'reads the future'"""
-        raise InputConflict(
-            "Can't read and write in the same operation"
-        )
-    def __hash__(self):
-        raise TypeError
+        raise InputConflict("Can't read and write in the same operation")
 
 
 
@@ -1031,10 +1031,6 @@ class List(UserList.UserList, Component):
     gets items, iterates, checks length, etc.) will be recalculated if the
     list is changed in any way.
 
-    Any changes that happen to the list are made "in the future", but all read
-    operations are done "in the present" -- so you can't see the effect of
-    any changes until the next Trellis recalculation.
-
     Note that this type is not efficient for large lists, as a copy-on-write
     strategy is used in each recalcultion that changes the list.  If what you
     really want is e.g. a sorted read-only view on a set, don't use this.
@@ -1042,7 +1038,7 @@ class List(UserList.UserList, Component):
 
     updated = todo(lambda self: self.data[:])
     future  = updated.future
-    changed = receiver(False)
+    changed = todo(lambda self: False)
 
     def __init__(self, other=(), **kw):
         Component.__init__(self, **kw)
@@ -1051,7 +1047,8 @@ class List(UserList.UserList, Component):
     decorators.decorate(rule)
     def data(self):
         if self.changed:
-            dirty(); return self.updated
+            dirty()
+            return self.updated
         return self.data or []
 
     decorators.decorate(modifier)
@@ -1063,6 +1060,9 @@ class List(UserList.UserList, Component):
     def __delitem__(self, i):
         self.changed = True
         del self.future[i]
+
+
+
 
     decorators.decorate(modifier)
     def __setslice__(self, i, j, other):
@@ -1152,10 +1152,6 @@ class Set(sets.Set, Component):
     The ``added`` and ``removed`` attributes can be watched for changes, but
     any rule that simply uses the set (e.g. iterates over it, checks for
     membership or size, etc.) will be recalculated if the set is changed.
-
-    Any changes that happen to the set are made "in the future", but anything
-    you read from the set is "in the present" -- so you can't see the effect of
-    any changes until the next Trellis recalculation.
     """
     _added = todo(lambda self: set())
     _removed = todo(lambda self: set())
@@ -1174,18 +1170,22 @@ class Set(sets.Set, Component):
     def _data(self):
         """The dictionary containing the set data."""
         data = self._data
-        if data is None:
-            data = {}
+        if data is None: data = {}
+        pop = data.pop
         if self.removed:
             dirty()
-            for item in self.removed:
-                if item in data: del data[item]
+            for item in self.removed: pop(item, None)
+            on_undo(data.update, dict.fromkeys(self.removed, True))
         if self.added:
-            dirty(); data.update(dict.fromkeys(self.added, True))
+            dirty()
+            data.update(dict.fromkeys(self.added, True))
+            for item in self.added: on_undo(pop, item, None)
         return data
 
     def __setstate__(self, data):
         self.__init__(data[0])
+
+
 
     def _binary_sanity_check(self, other):
         # Check that the other argument to a binary operation is also
@@ -1308,10 +1308,5 @@ def to_dict_or_set(ob):
     return ob
 
   
-
-
-  
-
-
 
 
