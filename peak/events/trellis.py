@@ -826,8 +826,6 @@ class TodoProperty(CellProperty):
         """Get a read-only property for the "future" of this attribute"""
         name = self.__name__
         def get(ob):
-            if not ctrl.active:
-                raise RuntimeError("future can only be accessed from a @modifier")
             try: cells = ob.__cells__
             except AttributeError: cells = Cells(ob)
             try:
@@ -836,17 +834,14 @@ class TodoProperty(CellProperty):
                 typ = type(ob)
                 cell = CellFactories(typ)[name](typ, ob, name)
                 cell = cells.setdefault(name, cell)
-            if cell._set_by is _sentinel:
-                cell.value = CellRules(type(ob))[name].__get__(ob)()
-                changed(cell)
-            return cell._value
+            return cell.get_future()
         return property(get, doc="The future value of the %r attribute" % name)
 
 
 def todo_factory(typ, ob, name):
     """Factory for ``todo`` cells"""
     rule = CellRules(typ).get(name).__get__(ob, typ)
-    return Cell(None, rule(), True)
+    return TodoValue(rule)
 
 
 
@@ -859,6 +854,52 @@ def todo_factory(typ, ob, name):
 
 
 
+
+
+
+
+
+class TodoValue(Value):
+    """Value that logs changes for mutable data structures"""
+
+    __slots__ = 'rule', '_savepoint'
+
+    def __new__(cls, rule):
+        return Value.__new__(cls)
+
+    def __init__(self, rule):
+        self.rule = rule
+        self._savepoint = None
+        Value.__init__(self, rule(), True)
+
+    def set_value(self, value):
+        if not ctrl.active:
+            atomically(self.set_value, value)
+        lock(self)
+        if self._savepoint is None:
+            change_attr(self, '_savepoint', savepoint())
+        #else:
+        #    on_undo(rollback_to, self._savepoint)
+        super(TodoValue, self).set_value(value)
+
+    value = property(Value.get_value.im_func, set_value)
+
+    def get_future(self):
+        """Get the 'future' value"""
+        if not ctrl.active:
+            raise RuntimeError("future can only be accessed from a @modifier")
+        lock(self)
+        if self._savepoint is None:
+            self.value = self.rule()
+            changed(self)
+        #else:
+        #    on_undo(rollback_to, self._savepoint)
+        return self._value
+
+    def _finish(self):
+        change_attr(self, '_savepoint', None)
+        super(TodoValue, self)._finish()
+        
 class Dict(UserDict.IterableUserDict, Component):
     """Dictionary-like object that recalculates observers when it's changed
 

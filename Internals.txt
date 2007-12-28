@@ -218,8 +218,9 @@ settings::
     >>> Test.to_x = Test.x.future
 
     >>> todo_factory(Test, Test(), 'x')
-    Value({}, discrete[{}])
+    TodoValue(<bound method Test.<lambda> of <Test ...>>, {}, discrete[{}])
 
+    >>> CellFactories(Test)['x'] = todo_factory
 
 future, @modifier, etc.
 -----------------------
@@ -244,6 +245,7 @@ future, @modifier, etc.
 
     >>> add(1, 2)
     t.x = {1: 2}
+    t.x = {}
 
     >>> def update(**kw):
     ...     for k, v in kw.items():
@@ -251,12 +253,15 @@ future, @modifier, etc.
 
     >>> update(x=1, y=2)
     t.x = {'y': 2}
+    t.x = {}
     t.x = {'x': 1}
+    t.x = {}
 
     >>> update = modifier(update)
 
     >>> update(x=1, y=2)    # it all happens in one go
     t.x = {'y': 2, 'x': 1}
+    t.x = {}
 
 
 task_factory
