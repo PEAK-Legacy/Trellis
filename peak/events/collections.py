@@ -56,12 +56,12 @@ class Observing(trellis.Component):
             if k in cells:
                 trellis.on_undo(cells.__setitem__, k, cells[k])
                 del cells[k]
-                trellis.dirty()
+                trellis.mark_dirty()
         lookup = self.lookup_func
         for k in self.keys.added:
             trellis.on_undo(cells.pop, k, None)
             cells[k] = trellis.Cell(instancemethod(lookup, k, type(k)))
-            trellis.dirty()
+            trellis.mark_dirty()
         return cells
 
     decorators.decorate(trellis.rule)

@@ -9,7 +9,7 @@ __all__ = [
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
     'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Return', 'TaskCell',
-    'dirty', 'ctrl',
+    'mark_dirty', 'ctrl',
 ]
 
 NO_VALUE = symbols.Symbol('NO_VALUE', __name__)
@@ -546,7 +546,7 @@ def poll():
     else:
         return ctrl.pulse.value
 
-def dirty():
+def mark_dirty():
     """Force the current rule's return value to be treated as if it changed"""
     assert ctrl.current_listener is not None, "dirty() must be called from a rule"
     changed(ctrl.current_listener)
@@ -738,7 +738,6 @@ def task(func):
 
 class CellProperty(object):
     """Descriptor for cell-based attributes"""
-
     def __init__(self, name):
         self.__name__ = name
 
@@ -762,7 +761,10 @@ class CellProperty(object):
         try: cells = ob.__cells__
         except AttributeError: cells = Cells(ob)
         if isinstance(value, AbstractCell):
-            cells[self.__name__] = value
+            name = self.__name__
+            if name in cells and isinstance(cells[name], _ConstantMixin):
+                raise AttributeError("Can't change a constant")
+            cells[name] = value
         else:
             try:
                 cell = cells[self.__name__]
@@ -774,8 +776,6 @@ class CellProperty(object):
                     return cells.setdefault(name, Constant(value))
                 cell = cells.setdefault(name, cell)
             cell.value = value
-
-
 
     def __eq__(self, other):
         return type(other) is type(self) and other.__name__==self.__name__
@@ -801,6 +801,9 @@ def _invoke_callback(
         items.append((CellValues, value))
 
     def callback(frame, name, func, locals):
+        if func.__name__ == '<lambda>':
+            try: func.__name__ = name
+            except TypeError: pass  # Python 2.3 doesn't let you set __name__
         for role, value in items:
             role.for_frame(frame).set(name, value)
         IsDiscrete.for_frame(frame).defaults[name] = False
@@ -813,9 +816,6 @@ def _invoke_callback(
     else:
         decorators.decorate_assignment(callback, frame=frame)
         return _sentinel
-
-
-
 
 
 class TodoProperty(CellProperty):
@@ -952,14 +952,14 @@ class Dict(UserDict.IterableUserDict, Component):
             on_undo(data.update, dict(old))
         pop = data.pop
         if self.deleted:
-            dirty()
+            mark_dirty()
             for key in self.deleted:
                 pop(key, None)
         if self.added:
             for key in self.added: on_undo(pop, key, None)
-            dirty(); data.update(self.added)
+            mark_dirty(); data.update(self.added)
         if self.changed:
-            dirty(); data.update(self.changed)
+            mark_dirty(); data.update(self.changed)
         return data    
 
     decorators.decorate(modifier)    
@@ -1047,7 +1047,7 @@ class List(UserList.UserList, Component):
     decorators.decorate(rule)
     def data(self):
         if self.changed:
-            dirty()
+            mark_dirty()
             return self.updated
         return self.data or []
 
@@ -1173,11 +1173,11 @@ class Set(sets.Set, Component):
         if data is None: data = {}
         pop = data.pop
         if self.removed:
-            dirty()
+            mark_dirty()
             for item in self.removed: pop(item, None)
             on_undo(data.update, dict.fromkeys(self.removed, True))
         if self.added:
-            dirty()
+            mark_dirty()
             data.update(dict.fromkeys(self.added, True))
             for item in self.added: on_undo(pop, item, None)
         return data

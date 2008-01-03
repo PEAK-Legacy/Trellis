@@ -220,9 +220,9 @@ instance above prints itself -- including when the instance is first created.
 That's because of two important Trellis principles:
 
 1. When a ``Component`` instance is created, all its "non-optional" cell
-   attributes are calculated at the end of ``Component.__init__()``.  That is,
-   if they have a rule or observer, it gets invoked, and the result is used to
-   determine the cell's initial value.
+   attributes are calculated after initialization is finished.  That is,
+   if the attribute has a rule or is an observer, the function is invoked,
+   and the result is used to determine the cell's initial value.
 
 2. While a cell's rule is running, *any* trellis Cell whose value is looked at
    becomes a dependency of that rule.  If the looked-at cell changes later, it
@@ -237,7 +237,7 @@ look at the rectangle's ``show`` attribute::
     None
 
 (The ``show`` rule is an observer, so the resulting attribute value is
-``None``.  Also notice that *rules are not methods* -- they are more like
+``None``.  Also notice that **rules are not methods** -- they are more like
 properties.)
 
 The second principle explains why the rectangle re-prints itself any time one
@@ -296,11 +296,43 @@ or any time before it is first read::
     >>> d.aDict
     {3: 4}
 
-However, since this rule is not an "optional" rule, the ``Component.__init__``
-method will read it, meaning that the only chance we get to override it is
-via the keyword arguments (or by setting it in a subclass ``__init__`` method).
-In the next section, we'll look at how to create "optional" rules: ones that
-don't get calculated at the moment a component is created.
+However, since this rule is not an "optional" rule, it will be read when the
+component initialization is finished, meaning that the only chance we get to
+override it is via the keyword arguments (or by setting it in a subclass's
+``__init__`` method).  In the next section, we'll look at how to create
+"optional" rules and observers: ones that don't get automatically calculated
+when a component is created.
+
+
+Observers vs. Rules
+-------------------
+
+You may have notice that we're using ``@trellis.observer`` to define rules that
+print things out, and ``@trellis.rule`` for rules that calculate things.
+
+We'll explain how and why this works later on.  For right now, just learn this
+rule of thumb: if a rule has side-effects that can't be undone, it must be an
+``observer``, not a ``rule``.  Observers are also not allowed to change any
+cells or Trellis-managed data structures.  If you need to do both, you'll need
+a ``rule`` *and* an ``observer``.
+
+And what do we mean by "side-effects that can't be undone"?  Well, the Trellis
+has an API for recording undo logs that can be used to roll back the effects of
+a calculation in the event of an error or a required recalculation.
+
+(Note, by the way, that this means observers should never raise errors.  If
+they do, the changes that caused the observer to fire will be rolled back, but
+if any other observers were fired first, their actions will *not* be rolled
+back, leaving your application in an inconsistent state.)
+
+
+We'll discuss the undo log mechanism in more detail later, in the section on
+`Creating Your Own Data Structures`_.  For now, just remember that
+``@trellis.observer`` should be used for side-effects that can't easily be
+undone, like printing, or updating a GUI.  If you have a rule that just changes
+other cells or Trellis-managed data structures, it's fine to use a
+``@trellis.rule``.  But if you must change non-trellis data structures inside a
+rule, you will need to log undo actions.
 
 
 "Optional" Rules and Subclassing
@@ -345,7 +377,7 @@ silent, since we haven't activated *their* ``show`` cells::
 
 Notice, by the way, that rules are more like properties than methods, which
 means you can't use ``super()`` to call the inherited version of a rule.
-(XXX Later, we'll look at other ways to access rule definitions.)
+(Later, we'll look at other ways to access rule definitions.)
 
 
 Model-View-Controller and the "Observer" Pattern
@@ -672,22 +704,20 @@ events instead?
 Let's look at an example.  Suppose you'd like to trigger an action whenever a
 new high temperature is seen::
 
-    >>> class HighDetector(trellis.Component):  # XXX
+    >>> class HighDetector(trellis.Component):
     ...     value = trellis.value(0)
-    ...     max_and_new = trellis.value((None, False))
+    ...     last_max = trellis.value(None)
     ...
     ...     @trellis.rule
-    ...     def max_and_new(self):
-    ...         last_max, was_new = self.max_and_new
+    ...     def new_high(self):
+    ...         last_max = self.last_max
     ...         if last_max is None:
-    ...             return self.value, False    # first seen isn't a new high
+    ...             self.last_max = self.value
+    ...             return False    # first seen isn't a new high
     ...         elif self.value > last_max:
-    ...             return self.value, True
-    ...         return last_max, False
-    ...
-    ...     trellis.rules(
-    ...         new_high = lambda self: self.max_and_new[1]
-    ...     )
+    ...             self.last_max = self.value
+    ...             return True
+    ...         return False
     ...
     ...     @trellis.observer
     ...     def monitor(self):
@@ -730,9 +760,13 @@ automatically reset to a default value as soon as all their observers have
 "seen" the original value.  Let's try a discrete version of the same thing::
 
     >>> class HighDetector2(HighDetector):
-    ...     new_high = trellis.value(False) # <- the default value
-    ...     new_high = trellis.discrete(lambda self: self.max_and_new[1])
-
+    ...     new_high = trellis.value(False)
+    ...
+    ...     @trellis.discrete
+    ...     def new_high(self):
+    ...         # this is a bit like a super() call, but for a rule:
+    ...         return trellis.CellRules(HighDetector)['new_high'](self)
+    
     >>> hd = HighDetector2()
 
     >>> hd.value = 7
@@ -758,6 +792,19 @@ other value::
 
     >>> hd.new_high
     False
+
+By the way, that ``trellis.CellRules(HighDetector)['new_high']`` in the new
+``new_high`` rule retrieves the base class version of the rule.  We could also
+have done the same thing this way::
+
+    >>> class HighDetector2(HighDetector):
+    ...     new_high = trellis.value(False)
+    ...     new_high = trellis.discrete(
+    ...         trellis.CellRules(HighDetector)['new_high']
+    ...     )
+
+and the result would have been the same, except it would run faster since the
+lookup of the inherited rule only happens once.
 
 
 Wiring Up Multiple Components
@@ -831,10 +878,15 @@ so that they can happen later, after all the desired changes have happened.
 That way, they don't take effect until the current event is completely
 finished.
 
+
+Modifiers
+---------
+
 The Trellis actually does something similar, but its internal "event queue" is
 automatically flushed whenever you set a value from outside a rule.  If you
 want to set multiple values, you need to use a ``@modifier`` function or
-method like this one, which we could've made a Rectangle method, but didn't::
+method like this one, which we could've made a method of ``Rectangle``, but
+didn't::
 
     >>> @trellis.modifier
     ... def set_position(rectangle, left, top):
@@ -846,9 +898,9 @@ method like this one, which we could've made a Rectangle method, but didn't::
 
 Notifications of changes made by a ``modifier`` do not take effect until the
 *outermost* active ``modifier`` function returns.  (In other words, if one
-``modifier`` calls another ``modifier``, the inner modifier's changes don't
-cause notifications to occur until the same time as the outer modifier's
-changes do.)
+``modifier`` directly or indirectly calls another ``modifier``, the inner
+modifier's changes don't cause notifications to occur until the same time
+as the outer modifier's changes do.)
 
 Now, notice that this means that within a ``modifier``, you can't rely on any
 values controlled by rules to be updated when you make changes.  This means
@@ -870,13 +922,12 @@ perspective, the bottom/right co-ordinates are not updated to reflect the
 changed top/left co-ordinates.  The second print is from an observer, showing
 that the values *do* get updated after the modifier has exited.
 
-XXX Rollback
 
 The Evil of Order Dependency
 ----------------------------
 
 The reason that time is the enemy of event driven programs is because time
-implies order, and order implies order dependency -- a major source of bugs
+implies order, and order implies order **dependency** -- a major source of bugs
 in event-driven and GUI programs.
 
 Writing a polished GUI program that has no visual glitches or behavioral quirks
@@ -898,37 +949,40 @@ bugs, but to prevent most of them from happening in the first place.
 And all you have to do to get the benefits, is to divide your code three ways:
 
 * Input code, that sets trellis cells or calls modifier methods (but does not
-  run inside trellis rules)
+  run *inside* trellis rules).  This kind of code is usually invoked by GUI or
+  other I/O callbacks, or by top-level non-trellis code.
 
-* Processing rules that compute values, but do not make changes to any other
-  cells, attributes, or other data structures (apart from local variables)
+* Processing rules that compute values, and/or make undo-able changes to cells
+  or other data structures.
 
-* Action rules that send data on to other systems (like the screen, a socket,
+* Output rules that send data on to other systems (like the screen, a socket,
   a database, etc.).  This code may appear in ``@trellis.observer`` rules, or
   it can be "application" code that reads results from a finished trellis
   calculation.
 
 The first and third kinds of code are inherently order-dependent, since
 information comes in (and must go out) in a meaningful order.  However, by
-putting related outputs in the same action rule (or non-rule code), you can
+putting related outputs in the same observer (or non-trellis code), you can
 ensure that the required order is enforced by a single piece of code.  This
 approach is highly bug-resistant.
 
 Second, you can reduce the order dependency of input code by making it do as
-little as possible, simply dumping data into input cells, where they can be
+little as possible, simply dumping data into input cells, where it can be
 handled by processing rules.  And, since input controllers can be very generic
 and highly-reusable, there's a natural limit to how much input code you will
 need.
 
 By using these approaches, you can maximize the portion of your application
-that appears in side effect-free processing rules, which the Trellis makes 100%
-immune to order dependencies.  Anything that happens in Trellis rules, happens
-*instantaneously*.  There is no "order", and thus no order dependency.
+that appears in side effect-free (or at least undo-able) processing rules,
+which the Trellis makes 100% immune to order dependencies.  Anything that
+happens in Trellis rules, happens *instantaneously*, in a logical sense.  Ther
+is no "order", and thus no order dependency.
 
 In truth, of course, rules do execute in *some* order.  However, as long as the
 rules don't do anything but compute their own values, then it cannot matter
 what order they do it in.  (The trellis guarantees this by automatically
-recalculating rules when they are read, if they aren't already up-to-date.)
+recalculating rules whenever their dependencies change, and undoing any
+calculations that "saw" out-of-date or inconsistent values.)
 
 
 The Side-Effect Rules
@@ -952,44 +1006,17 @@ Celsius or Fahrenheit might have come first on any given change to the
 temperatures.  So, if you care about the relative order of certain output or
 actions, you must put them all in one observer.  If that makes the code too big
 or complex, you can always refactor to extract new rules to calculate the
-intermediate values.  Just don't put any of the *actions* (i.e. side-effects or
-outputs) in the other rules, only the *calculations*.  Then have an observer
-that *only* does the output or actions.
+intermediate values.  Just don't put any of the external actions in the other
+rules, only the *calculations*.  Then have an observer that *only* does the
+external actions.
 
 
-Rule 2 - Return Values, Don't Set Them
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Rules should always *compute* a value, rather than changing other values.  If
-you need to compute more than one thing at once, just make a rule that returns
-a tuple or some other data structure, then make other rules that pull the
-values out.  E.g.::
-
-    >>> class Example(trellis.Component):
-    ...     trellis.rules(
-    ...         _foobar = lambda self: (1, 2),
-    ...         foo = lambda self: self._foobar[0],
-    ...         bar = lambda self: self._foobar[1]
-    ...     )
-
-In other words, there's no need to write an ``UpdateFooBar`` method that
-computes and sets ``foo`` and ``bar``, the way you would in a callback-based
-system.  Remember: rules are not callbacks!  So always *return* values instead
-of *assigning* values.
-
-If you need to keep track of some value between invocations of the same rule,
-make that value part of the rule's return value, then refer back to that value
-each time.  See the sections above on `Accessing a Rule's Previous Value`_ and
-`"Discrete" Rules`_ for examples of rules that re-use their previous value,
-and/or use a tuple to keep track of state.
-
-
-Rule 3 - If You MUST Set, Do It From One Place or With One Value
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Rule 2 - When Setting Or Changing, Use One Rule or One Value
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you set a value from more than one place, you are introducing an order
-dependency.  In fact, if you set a value from more than one rule, the Trellis
-will stop you, unless the values are equal.  For example::
+dependency.  In fact, if you set a cell value from more than one rule, the
+Trellis will stop you, unless the values are equal.  For example::
 
     >>> class Conflict(trellis.Component):
     ...     value = trellis.value(99)
@@ -1035,15 +1062,68 @@ is exactly the same: the receiver processes the ``True`` message once and then
 discards it.
 
 
-Rule 4 - Change Takes Time
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Rule 3 - Rule Side-Effects MUST Be Logged For Undo
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Be aware that if you ever change a cell or other Trellis data structure from
-inside an ``@action`` rule, this will trigger a recalculation of the trellis,
-once all current action rules are completed.  This effectively causes a loop,
-which *may not terminate* if your action rule is triggered again.  So beware of
-making such changes; there is nearly always a better way to get the result
-you're looking for -- i.e., one that doesn't involve action rules.
+If your rules only set cell values or modify trellis-managed data structures,
+you don't need to worry about undo logging, as it's taken care of for you.
+
+However, if you implement any other kind of side-effects in a rule (such as
+updating a mutable data structure that's not trellis-managed), you **must**
+record undo actions to allow the trellis to roll back your rule's action(s), in
+the event that it must be recalculated due to an order inconsistency, or if an
+error occurs during recalculation.  If you don't do this, you risk corrupting
+your program's state.  This is especially important if you are creating a new
+trellis-managed data structure type.
+
+In general, it's best to keep side-effects in rules to a minimum, and use only
+cells and other trellis-managed data structures.  And of course, any side
+effects that can't easily be undone should be placed in an @observer, which is
+guaranteed to run no more than once per overall recalculation of the trellis.
+
+However, if you are creating your own trellis-managed data structure type, you
+will need to use the ``trellis.on_undo()`` API to register undo callbacks, to
+protect your data structure's integrity.  See the section below on `Creating
+Your Own Data Structures`_ for more details on how this works.
+
+
+Rule 4 - If You Write, Don't Read!
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Be aware that rules with side-effects **cannot** see the ultimate effect of
+their changes, and so should avoid reading anything but their minimum required
+inputs.  For example::
+
+    >>> import sys
+    
+    >>> class ChangeTakesTime(trellis.Component):
+    ...     v1 = trellis.value(2)
+    ...     v2 = trellis.rule(lambda self: self.v1*2)
+    ...     @trellis.rule
+    ...     def update(self):
+    ...         if self.v1!=3:
+    ...             print "before", self.v1, self.v2
+    ...             self.v1 = 3
+    ...             print "after", self.v1, self.v2
+
+    >>> x = ChangeTakesTime()
+    before 2 4
+    after 3 4
+
+    >>> x.v2
+    6
+
+Here's what's happening: first, ``v2`` is calculated as ``2*2 == 4``.  Then,
+the ``update`` rule sets ``v1`` to 3.  However, ``v2`` is NOT immediately
+updated.  Instead, it's put on a schedule of rules to be re-run.  So the
+``update`` rule still sees the OLD value of ``v2``.
+
+So, if you are making any kind of changes from inside a rule, beware of trying
+to read anything that might be affected by those changes, as you will likely
+see something that's out of date.  This is particularly important when changing
+trellis-managed data structures, since many data structures rely on rules for
+their internal consistency.  So if you write and read the same data structure
+from a single rule, you will almost certainly see inconsistent results.
 
 
 Mutable Data Structures
@@ -1056,13 +1136,17 @@ implementations of these types can't be "observed" by rules, which means that
 they won't be automatically updated.
 
 But this doesn't mean you can't use sets, lists, and dictionaries.  You just
-need to use Trellis-ized ones.  Of course, all the warnings above about
+need to use Trellis-managed ones.  (Of course, all the warnings above about
 changing values still apply; just because you're modifying something other
-than attributes, doesn't mean you're not still modifying things!
+than attributes, doesn't mean you're not still modifying things!)
 
-The Trellis package provides three mutable types for you to use in your
+The Trellis package provides three primary mutable types for you to use in your
 components: ``Set``, ``List``, and ``Dict``.  You can also subclass them or
-create your own mutable types, as we'll discuss in a later section.
+create your own mutable types, as we'll discuss in a later section.  (And, the
+``peak.events.collections`` module also provides some fancier data structures;
+see the `Collections manual`_ for details.)
+
+.. _Collections manual: http://peak.telecommunity.com/DevCenter/TrellisCollections
 
 
 trellis.Dict
@@ -1285,7 +1369,7 @@ creating a custom data structure of your own design.  That way, if you only
 need a subset of the list interface, you can implement a changelog-based
 structure.  For example, the Trellis package includes a ``SortedSet`` type
 that maintains an index of items sorted by keys, with a cell that lists
-changed regions.  (See the "Collections" manual for more details.)
+changed regions.  (See the `Collections manual`_ for more details.)
 
 
 Creating Your Own Data Structures
@@ -1295,8 +1379,8 @@ If you want to create your own data structures along the lines of ``Dict``,
 ``List``, and ``Set``, you have a few options.  First, you can just build
 components that use those existing data types, and use ``@modifier`` methods
 to perform operations on them.  (If you just directly perform operations, then
-observers of your data structure may be recalculated in the middle of the
-changes.)
+listeners of your data structure may be recalculated in the middle of your
+changes, and see an inconsistent state.)
 
 Depending on the nature of the data structure you need, however, this may not
 be sufficient.  For example, when you perform multiple operations on a
@@ -1352,7 +1436,7 @@ decorator on a function, or using ``trellis.todos(attr=func, ...)`` in your
 class body.)
 
 The default value of a ``@todo`` cell is determined by calling the function it
-wraps when the cell is created.  This value is then saved as the default value
+wraps, when the cell is created.  This value is then saved as the default value
 for the life of the cell.
 
 The second thing that we do in this class is create a "future" view.  Todo
@@ -1363,13 +1447,11 @@ Next, we define a modifier method, ``add()``.  This method accesses the
 ``to_add`` attribute, and gets the *future* value of the ``items`` attribute.
 This future value is initially created by calling the "todo" cell's function.
 In this case, the todo function returns an empty list, so that's what ``add()``
-sees, and adds a value to it.  As a side effect of accessing this future value,
-the Trellis schedules a recalculation to occur after the current recalculation
-is finished.
+sees, and adds a value to it.
 
-(Note, by the way, that you cannot access future values except from inside
-a ``@modifier`` function, and these in turn can only be called from ``@action``
-or non-Trellis code.)
+(Note, by the way, that you cannot access future values except from inside a
+``@modifier`` function, which in turn is called from either a rule or from
+non-Trellis code.)
 
 In our second example above, we create another ``@modifier`` that adds more
 than one item to the ``to_add`` attribute.  This works because only a single
@@ -1441,8 +1523,10 @@ returned a new list, because the old list still had its old contents, and the
 new list was different.
 
 If you are modifying a return value in place like this, you should use the
-the ``trellis.dirty()`` API to flag that your return value has changed, even
-though it's the same object::
+the ``trellis.mark_dirty()`` API to flag that your return value has changed,
+even though it's the same object.  In addition, you should log an undo action
+so that if the trellis needs to roll back some calculations involving your data
+structure, it can do so::
 
     >>> class Queue4(Queue2):
     ...     @trellis.rule
@@ -1451,11 +1535,12 @@ though it's the same object::
     ...         if items is None:
     ...             items = []
     ...         if self.added:
+    ...             trellis.on_undo(items.__delitem__, slice(len(items),None))
     ...             items.extend(self.added)
-    ...             trellis.dirty()
+    ...             trellis.mark_dirty()
     ...         return items
 
-    >>> q = Queue2()
+    >>> q = Queue4()
     >>> view.model = q
     []
 
@@ -1465,16 +1550,72 @@ though it's the same object::
     >>> add_many(2, 3, 4)
     [1, 2, 3, 4]
 
-Please note, however, that using this API is as "dirty" as its name
-implies.  More precisely, the dirtiness is that we're modifying a value inside
-a rule -- the worst sort of no-no.  You must take extra care to ensure that
-all your dependencies have already been calculated before you perform the
-modification, otherwise an unexpected error could leave your data in a
-corrupted state.  In this example, the modification is the last thing that
-happens, and ``self.added`` has already been read, so it should be pretty safe.
+As you can see, calling ``mark_dirty()`` caused the trellis to notice the
+change to the list, even though the newly-returned list is (by definition)
+still equal to the previous value of the rule (i.e., the same list).
 
-On the whole, though, it's best to stick with immutable values as much as
-possible, and avoid mutating data in place if you can.
+The ``on_undo()`` function lets you register a callback function (with optional
+positional arguments) that will be invoked if the trellis needs to roll back
+changes due to an error, or due to an out-of-order calculation.  (If a rule
+makes a change to a data structure that has already been read by another rule,
+the trellis has to undo any changes made by the earlier rule and re-run it to
+ensure consistent results.)
+
+Registered functions are called in reverse order, so that callbacks registered
+by later ``on_undo()`` calls will run before earlier ones.  The Trellis keeps
+track of what callbacks were registered during each rule's execution, so that
+it can roll back the minimum number of changes needed to resolve a calculation
+order conflict.  In the event of an error, however, all changes are rolled
+back::
+
+    >>> @trellis.modifier
+    ... def error_demo():
+    ...     @trellis.ObserverCell   # make a cell w/out an attribute
+    ...     def bad_observer():
+    ...         print q
+    ...         raise RuntimeError("ha!")
+    ...     q.add(5)
+
+    >>> try: error_demo()
+    ... except RuntimeError: print "caught error"
+    [1, 2, 3, 4, 5]
+    caught error
+
+    >>> print q
+    [1, 2, 3, 4]
+
+This example is a bit odd, because it's somewhat difficult to force the trellis
+to get an error in such a way as to test your undo logging.  If we had simply
+raised an error in the modifier, the change would *appear* to have been rolled
+back, when in fact it hadn't happened yet!  (It's easy to see this if you add
+a "print" to the ``items`` rule -- if you raise an error in the modifier, it
+will never be called, because the rules don't run until the modifier is over.)
+
+So to actually test the undo-ing, we have to raise the error in a new observer
+cell, which then runs after ``q.items`` is updated. (Observers don't run
+until/unless there are no normal rules pending.)
+
+In later sections on `Working with Cell Objects`_, we'll see more about how to
+create and use one-off cells like this ``ObserverCell``, without needing to
+make them part of a component.
+
+In the meantime, please note that creating good trellis data structures can be
+tricky: be sure to write automated tests for your code, and verify that they
+actually test what you *think* they test.  This is one situation where it's
+REALLY a good idea to write your tests first, and try to make them fail
+*before* you add any ``mark_dirty()`` or ``on_undo()`` calls to your code.
+Otherwise, you won't be sure that your tests are really testing anything!
+
+Of course, you don't need to deal with ``mark_dirty()`` and ``undo()`` at all,
+if you stick to using immutable values as a basis for your data structure, or
+use a copy-on-write approach like that shown in our ``Queue2`` example above.
+Such data structures are less efficient than updating in-place, if they contain
+large amounts of data, but not every data structure needs to contain large
+quantities of data!  We suggest that you start with simpler data structures
+first, and only add in-place updates if and when you can prove that the data
+copying is unacceptable overhead, since such updates are harder to write
+in a provably-correct way.  (Note, too, that Python's built-in data types can
+often copy data a lot faster than you'd expect...)
 
 
 Other Things You Can Do With A Trellis
@@ -1700,7 +1841,11 @@ The ObserverCell constructor takes only one parameter: a zero-argument callable,
 such as a bound method or a function with no parameters.  You can't set a value
 for an ``ObserverCell`` (because it's not writable), nor can you make it discrete
 (since that would imply a readable value, and observer cells exist only for
-their side-effects).
+their side-effects).  Creating an observer cell schedules it for execution, as
+soon as the current modifier is complete and any normal rules are finished.  It
+will then be re-executed in the future, after any cells or other trellis-
+managed data structures it depended on are changed.  (As long as the
+ObserverCell isn't garbage collected, of course.)
 
 
 Cell Attribute Metadata
@@ -1859,13 +2004,6 @@ Open Issues
   * Debugging code that does modifications can be difficult because it can be
     hard to know which cells are which.  There should be a way to give cells
     an identifier, so you know what you're looking at.
-
-  * Coroutine/task rules and discrete rules are somewhat unintuitive as to
-    their results.  It's not easy to tell when you should ``poll()`` or
-    ``repeat()``, especially since things will sometimes *seem* to work without
-    them.  In particular, we probably need a way to return *multiple* values
-    from a rule via an output queue.  That way, a discrete rule or task's
-    recalculation can be separated from mere outputting of queued values.
 
   * Currently, there's no protection against accessing Cells from other
     threads, nor support for having different logical tasks in the same thread

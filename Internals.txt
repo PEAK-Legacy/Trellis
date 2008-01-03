@@ -334,8 +334,8 @@ Decorators
     ...     def task(self): yield None
 
     >>> CellRules(Test)
-    {'added': <function <lambda> at ...>,
-     'removed': <function <lambda> at...>,
+    {'added': <function ... at ...>,
+     'removed': <function ... at...>,
      'task': <function task at ...>}
 
     >>> CellValues(Test)
@@ -483,8 +483,11 @@ replace it with a constant::
     >>> t.__cells__['x']
     Constant(())
 
-XXX better error message for write to read-only cell
-
+    >>> t.x = r
+    Traceback (most recent call last):
+      ...
+    AttributeError: Can't change a constant
+    
 
 A component should not create cells for attributes that are not cell properties
 (e.g., due to override in a subclass)::
