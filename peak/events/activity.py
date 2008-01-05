@@ -1,11 +1,12 @@
 from peak import context
-from peak.events import trellis
-from peak.util import addons, decorators
+from peak.events import trellis, stm
+from peak.util import addons, decorators, symbols
 from peak.util.extremes import Min, Max
-import heapq, weakref, time
+import heapq, weakref, time, sys
 
 __all__ = [
     'Time', 'EPOCH', 'NOT_YET', 'EventLoop', 'WXEventLoop', 'TwistedEventLoop',
+    'task', 'resume', 'Pause', 'Return', 'TaskCell',
 ]
 
 try:
@@ -13,7 +14,6 @@ try:
 except NameError:
     from sets import Set as set
         
-
 
 
 
@@ -123,7 +123,6 @@ NOT_YET = _Timer(Max)
 
 class EventLoop(trellis.Component, context.Service):
     """Run an application event loop"""
-
     trellis.values(
         running = False,
         stop_requested = False, _call_queue = None
@@ -132,20 +131,21 @@ class EventLoop(trellis.Component, context.Service):
         _call_queue = lambda self: [],
         _next_time = lambda self: Time.next_event_time(True),
     )
-    _callback_active = False
+    _callback_active = initialized = False
 
     def run(self):
         """Loop updating the time and invoking requested calls"""
         assert not self.running, "EventLoop is already running"
         assert not trellis.ctrl.active, "Event loop can't be run atomically"
-        trellis.atomically(self._setup)
+        self.call(lambda:None)
         self.stop_requested = False
         self.running = True
         try:
+            Time.tick()
             self._loop()
+            self.stop()
         finally:
-            self.running = False
-            self.stop_requested = False
+            self._tearDown()
             
     def stop(self):
         """Stop the event loop at the next opportunity"""
@@ -156,11 +156,11 @@ class EventLoop(trellis.Component, context.Service):
     def call(self, func, *args, **kw):
         """Call `func(*args, **kw)` at the next opportunity"""
         self._call_queue.append((func, args, kw))
-        self._setup()
+        if not self.initialized:
+            self._setup()
+            self.initialized = True
         trellis.on_undo(self._call_queue.pop)
         self._callback_if_needed()
-
-
 
     def poll(self):
         """Execute up to a single pending call"""
@@ -193,14 +193,14 @@ class EventLoop(trellis.Component, context.Service):
             return head
         return ()
 
+    decorators.decorate(trellis.modifier)
+    def _tearDown(self):
+        self.running = False
+        self.stop_requested = False
+
     def _callback(self):
         self._callback_active = False
         self.flush(1)
-
-
-
-
-
 
 
     def _loop(self):
@@ -267,16 +267,16 @@ class TwistedEventLoop(EventLoop):
 
     def _loop(self):
         """Loop updating the time and invoking requested calls"""
-        Time.tick()
         self.reactor.run()
 
     def _arrange_callback(self, func):
         self.reactor.callLater(0, func)
 
     def _setup(self):
-        if self.reactor is None:
-            from twisted.internet import reactor
-            self.reactor = reactor
+        from twisted.internet import reactor
+        self.reactor = reactor
+
+
 
 
 
@@ -296,6 +296,7 @@ class WXEventLoop(EventLoop):
     context.replaces(EventLoop)    
     wx = None
 
+    decorators.decorate(trellis.observer)
     def _ticker(self):
         if self.running:
             if Time.auto_update:
@@ -303,7 +304,6 @@ class WXEventLoop(EventLoop):
                     self.wx.FutureCall(self._next_time*1000, Time.tick)
             if self.stop_requested:
                 self.wx.GetApp().ExitMainLoop()
-    _ticker = trellis.observer(_ticker)
 
     def _loop(self):
         """Loop updating the time and invoking requested calls"""
@@ -312,7 +312,7 @@ class WXEventLoop(EventLoop):
         while not self.stop_requested:
             app.MainLoop()
             if app.ExitOnFrameDelete:   # handle case where windows exist
-                self.stop_requested = True
+                self.stop()
             else:
                 app.ProcessPendingEvents()  # ugh
 
@@ -321,51 +321,51 @@ class WXEventLoop(EventLoop):
         self.wx.CallAfter(func)
             
     def _setup(self):
-        if not self.wx:
-            import wx
-            self.wx = wx
+        import wx
+        self.wx = wx
+
 
 
 class Time(trellis.Component, context.Service):
     """Manage current time and intervals"""
 
+    _now = EPOCH._when
     trellis.values(
         _tick = EPOCH._when,
         auto_update = True,
         _schedule = None,
     )
-    _now   = EPOCH._when
-
     trellis.rules(
         _schedule = lambda self: [Max],
         _events = lambda self: weakref.WeakValueDictionary(),
     )
+
+    decorators.decorate(trellis.rule)
     def _updated(self):
-        while self._tick >= self._schedule[0]:
-            key = heapq.heappop(self._schedule)
+        schedule = self._schedule
+        while self._tick >= schedule[0]:
+            key = heapq.heappop(schedule)
+            trellis.on_undo(heapq.heappush, schedule, key)
             if key in self._events:
-                self._events.pop(key).value = True
-
-    _updated = trellis.rule(_updated)   
-
+                self._events[key].value = True
+    
     def reached(self, timer):
         when = timer._when
-        if when not in self._events:
-            if self._now >= when:
-                return True
-            if trellis.ctrl.current_listener is not None:
-                heapq.heappush(self._schedule, when)
-                trellis.ctrl.changed(self.__cells__['_schedule'])
-                self._events[when] = e = trellis.Value(False)
-            else:
-                return False
-        return self._events[when].value
+        return self._now >= when or (
+            trellis.ctrl.current_listener is not None
+            and self._event_for(when).value
+        )
 
-
-
-
-
-
+    decorators.decorate(trellis.modifier)
+    def _event_for(self, when):
+        e = self._events.get(when)
+        if e is None:
+            # heappush doesn't need undo, since _update ignores extras
+            heapq.heappush(self._schedule, when)
+            self._events[when] = e = trellis.Value(False)
+            trellis.on_undo(self._events.pop, when, None)
+            trellis.changed(trellis.Cells(self)['_schedule'])
+        return e
 
     def __getitem__(self, interval):
         """Return a timer that's the given offset from the current time"""
@@ -407,4 +407,168 @@ class Time(trellis.Component, context.Service):
         return when
 
     def time(self): return time.time()
+
+class TaskCell(trellis.AbstractCell, stm.AbstractListener):
+    """Cell that manages a generator-based task"""
+    
+    __slots__ = (
+        '_result', '_error', '_step', 'next_subject', 'layer', '_loop',
+        '_scheduled', '__weakref__',
+    )
+
+    def __init__(self, func):
+        self._step = self._stepper(func)
+        self.layer = 0
+        self.next_subject = None
+        self._loop = EventLoop.get()
+        self._scheduled = False
+        trellis.atomically(self.dirty)
+
+    def dirty(self):
+        if not self._scheduled:
+            trellis.change_attr(self, '_scheduled', True)
+            trellis.on_commit(self._loop.call, trellis.atomically, self.do_run)
+            trellis.on_commit(trellis.change_attr, self, '_scheduled', False)
+        return False
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def _stepper(self, func):
+        VALUE = self._result = []
+        ERROR = self._error  = []               
+        STACK = [func()]
+        CALL = STACK.append
+        RETURN = STACK.pop
+        ctrl = trellis.ctrl
+        def _step():
+            while STACK:
+                try:
+                    it = STACK[-1]
+                    if VALUE and hasattr(it, 'send'):
+                        rv = it.send(VALUE[0])
+                    elif ERROR and hasattr(it, 'throw'):
+                        rv = it.throw(*ERROR.pop())
+                    else:
+                        rv = it.next()
+                except:
+                    del VALUE[:]
+                    ERROR.append(sys.exc_info())
+                    if ERROR[-1][0] is StopIteration:
+                        ERROR.pop() # not really an error
+                    RETURN()
+                else:
+                    del VALUE[:]
+                    if rv is Pause:
+                        break
+                    elif hasattr(rv, 'next'):
+                        CALL(rv); continue
+                    elif isinstance(rv, Return):
+                        rv = rv.value
+                    VALUE.append(rv)
+                    if len(STACK)==1: break
+                    RETURN()
+            if STACK and not ERROR and not ctrl.reads:
+                ctrl.current_listener.dirty() # re-run if still running
+            return resume()
+
+        return _step
+
+
+    def do_run(self):
+        ctrl = trellis.ctrl
+        ctrl.current_listener = self
+        try:
+            try:
+                self._step()
+                # process writes as if from a non-rule perspective
+                writes = ctrl.writes
+                has_run = ctrl.has_run.get
+                while writes:
+                    subject, writer = writes.popitem()
+                    for dependent in subject.iter_listeners():
+                        if has_run(dependent) is not self:
+                            if dependent.dirty():
+                                ctrl.schedule(dependent)
+
+                # process reads in normal fashion
+                ctrl._process_reads(self)
+
+            except:
+                ctrl.reads.clear()
+                ctrl.writes.clear()
+                raise           
+        finally:
+            ctrl.current_listener = None
+
+Pause = symbols.Symbol('Pause', __name__)
+
+decorators.struct()
+def Return(value):
+    """Wrapper for yielding a value from a task"""
+    return value,
+
+
+
+
+
+
+
+
+
+def resume():
+    """Get the result of a nested task invocation (needed for Python<2.5)"""
+    c = trellis.ctrl.current_listener
+    if not isinstance(c, TaskCell):
+        raise RuntimeError("resume() must be called from an @activity.task")
+    elif c._result:
+        return c._result[0]
+    elif c._error:
+        e = c._error.pop()
+        try:
+            raise e[0], e[1], e[2]
+        finally:
+            del e
+
+def task_factory(typ, ob, name):
+    return trellis.default_factory(typ, ob, name, TaskCell)
+
+def task(func):
+    """Define a rule cell attribute"""
+    return trellis._rule(func, '@task', task_factory, __frame=sys._getframe(1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

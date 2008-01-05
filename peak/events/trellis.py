@@ -8,8 +8,7 @@ __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
-    'Dict', 'List', 'Set', 'task', 'resume', 'Pause', 'Return', 'TaskCell',
-    'mark_dirty', 'ctrl',
+    'Dict', 'List', 'Set', 'mark_dirty', 'ctrl',
 ]
 
 NO_VALUE = symbols.Symbol('NO_VALUE', __name__)
@@ -17,6 +16,7 @@ _sentinel = NO_VALUE
 
 class InputConflict(Exception):
     """Attempt to set a cell to two different values during the same pulse"""
+
 
 
 
@@ -552,172 +552,8 @@ def mark_dirty():
     changed(ctrl.current_listener)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class TaskCell(AbstractCell, stm.AbstractListener):
-    """Cell that manages a generator-based task"""
-    
-    __slots__ = (
-        '_result', '_error', '_step', 'next_subject', 'layer', '_loop',
-        '_scheduled', '__weakref__',
-    )
-
-    def __init__(self, func):
-        self._step = self._stepper(func)
-        self.layer = 0
-        self.next_subject = None
-        from activity import EventLoop
-        self._loop = EventLoop.get()
-        self._scheduled = False
-        atomically(self.dirty)
-
-    def dirty(self):
-        if not self._scheduled:
-            change_attr(self, '_scheduled', True)
-            on_commit(self._loop.call, atomically, self.do_run)
-            on_commit(change_attr, self, '_scheduled', False)
-        return False
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def _stepper(self, func):
-        VALUE = self._result = []
-        ERROR = self._error  = []               
-        STACK = [func()]
-        CALL = STACK.append
-        RETURN = STACK.pop
-
-        def _step():
-            while STACK:
-                try:
-                    it = STACK[-1]
-                    if VALUE and hasattr(it, 'send'):
-                        rv = it.send(VALUE[0])
-                    elif ERROR and hasattr(it, 'throw'):
-                        rv = it.throw(*ERROR.pop())
-                    else:
-                        rv = it.next()
-                except:
-                    del VALUE[:]
-                    ERROR.append(sys.exc_info())
-                    if ERROR[-1][0] is StopIteration:
-                        ERROR.pop() # not really an error
-                    RETURN()
-                else:
-                    del VALUE[:]
-                    if rv is Pause:
-                        break
-                    elif hasattr(rv, 'next'):
-                        CALL(rv); continue
-                    elif isinstance(rv, Return):
-                        rv = rv.value
-                    VALUE.append(rv)
-                    if len(STACK)==1: break
-                    RETURN()
-            if STACK and not ERROR and not ctrl.reads:
-                ctrl.current_listener.dirty()    # re-run if still running
-            return resume()
-
-        return _step
-
-
-    def do_run(self):
-        ctrl.current_listener = self
-        try:
-            try:
-                self._step()
-                # process writes as if from a non-rule perspective
-                writes = ctrl.writes
-                has_run = ctrl.has_run.get
-                while writes:
-                    subject, writer = writes.popitem()
-                    for dependent in subject.iter_listeners():
-                        if has_run(dependent) is not self:
-                            if dependent.dirty():
-                                schedule(dependent)
-
-                # process reads in normal fashion
-                ctrl._process_reads(self)
-
-            except:
-                ctrl.reads.clear()
-                ctrl.writes.clear()
-                raise           
-        finally:
-            ctrl.current_listener = None
-
-Pause = symbols.Symbol('Pause', __name__)
-
-decorators.struct()
-def Return(value):
-    """Wrapper for yielding a value from a task"""
-    return value,
-
-
-
-
-
-
-
-
-
-
-def resume():
-    """Get the result of a nested task invocation (needed for Python<2.5)"""
-    c = ctrl.current_listener
-    if not isinstance(c, TaskCell):
-        raise RuntimeError("resume() must be called from a @trellis.task")
-    elif c._result:
-        return c._result[0]
-    elif c._error:
-        e = c._error.pop()
-        try:
-            raise e[0], e[1], e[2]
-        finally:
-            del e
-
-def task_factory(typ, ob, name):
-    return default_factory(typ, ob, name, TaskCell)
-
 def observer_factory(typ, ob, name):
     return default_factory(typ, ob, name, ObserverCell)
-
-def task(func):
-    """Define a rule cell attribute"""
-    return _rule(func, '@task', task_factory, __frame=sys._getframe(1))
 
 
 

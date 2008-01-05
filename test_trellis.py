@@ -1,7 +1,7 @@
 from test_sets import *
 from peak import context
 from peak.events.activity import EventLoop, TwistedEventLoop, Time, NOT_YET
-from peak.events import trellis, stm, collections
+from peak.events import trellis, stm, collections, activity
 from peak.util.decorators import rewrap, decorate as d
 from peak.util.extremes import Max
 import unittest, heapq, mocker, types, sys
@@ -1023,10 +1023,6 @@ class TestCells(mocker.MockerTestCase):
         self.assertEqual(set(o._watching), set([4,5]))
 
             
-
-
-
-
 class TestDefaultEventLoop(unittest.TestCase):
 
     def setUp(self):
@@ -1081,7 +1077,48 @@ class TestDefaultEventLoop(unittest.TestCase):
         self.loop.flush()
         self.assertEqual(log, [1, 3])
         
+    def testScheduleUndo(self):
+        t = Time()
+        t.auto_update = False
+        d(trellis.ObserverCell)
+        def err_after_reached():
+            if len(t._schedule)>1:
+                raise DummyError
+        t20 = t[20]
+        log = []
+        d(trellis.Cell)
+        def checktime():
+            t.reached(t20)
+            log.append(t._events[t20._when])
+        self.assertRaises(DummyError, checktime.get_value)
+        self.assertEqual(t._schedule, [t20._when, Max])
+        self.assertEqual(dict(t._events), {})
+        self.failUnless(isinstance(log.pop(), trellis.Value))
+        self.assertEqual(log, [])
 
+    def force_rollback(self):
+        d(trellis.ObserverCell)
+        def do_it():
+            raise DummyError
+
+
+
+
+
+    def testUpdateUndo(self):
+        t = Time()
+        t.auto_update = False
+        t20 = t[20]
+        d(trellis.Cell)
+        def checktime():
+            if t.reached(t20):
+                self.force_rollback()
+        checktime.value
+        self.assertEqual(t._schedule, [t20._when, Max])
+        self.assertEqual(list(t._events), [t20._when])
+        self.assertRaises(DummyError, t.advance, 20)
+        self.assertEqual(t._schedule, [t20._when, Max])
+        self.assertEqual(list(t._events), [t20._when])
 
 
 
@@ -1118,10 +1155,10 @@ class TestTasks(unittest.TestCase):
         def f():
             self.failUnless(self.ctrl.active)
             log.append(1)
-            yield trellis.Pause
+            yield activity.Pause
             self.failUnless(self.ctrl.active)
             log.append(2)
-        t = trellis.TaskCell(f)
+        t = activity.TaskCell(f)
         self.assertEqual(log, [])
         t._loop.flush()
         self.assertEqual(log, [1])
@@ -1137,8 +1174,8 @@ class TestTasks(unittest.TestCase):
             while v.value:
                 log.append(v.value)
                 v1.value = v.value
-                yield trellis.Pause
-        t = trellis.TaskCell(f)
+                yield activity.Pause
+        t = activity.TaskCell(f)
         check = []
         for j in 42, 57, 99, 106, 23, None:
             self.assertEqual(log, check)
@@ -1161,14 +1198,14 @@ class TestTasks(unittest.TestCase):
             def wait_for_start(self):
                 log.append("waiting to start")
                 while not self.start:
-                    yield trellis.Pause
+                    yield activity.Pause
         
             def wait_for_stop(self):
                 while not self.stop:
                     log.append("waiting to stop")
-                    yield trellis.Pause
+                    yield activity.Pause
         
-            d(trellis.task)
+            d(activity.task)
             def demo(self):
                 yield self.wait_for_start()
                 log.append("starting")
@@ -1196,20 +1233,20 @@ class TestTasks(unittest.TestCase):
         def f1():
             yield 42
         def f2():
-            yield f1(); yield trellis.resume()
+            yield f1(); yield activity.resume()
         def f3():
-            yield f2(); v = trellis.resume()
+            yield f2(); v = activity.resume()
             log.append(v)
 
-        t = trellis.TaskCell(f3)
+        t = activity.TaskCell(f3)
         EventLoop.flush()
         self.assertEqual(log, [42])
 
         log = []
         def f1():
-            yield trellis.Return(42)
+            yield activity.Return(42)
 
-        t = trellis.TaskCell(f3)
+        t = activity.TaskCell(f3)
         EventLoop.flush()
         self.assertEqual(log, [42])
 
@@ -1220,13 +1257,13 @@ class TestTasks(unittest.TestCase):
             raise DummyError
         def f2():
             try:
-                yield f1(); trellis.resume()
+                yield f1(); activity.resume()
             except DummyError:
                 log.append(True)
             else:
                 pass
             
-        t = trellis.TaskCell(f2)
+        t = activity.TaskCell(f2)
         self.assertEqual(log, [])
         EventLoop.flush()
         self.assertEqual(log, [True])
@@ -1255,7 +1292,7 @@ class TestTasks(unittest.TestCase):
                 raise StopIteration                
 
         def fs(): yield SendThrowIter()
-        t = trellis.TaskCell(fs)
+        t = activity.TaskCell(fs)
         self.assertEqual(log, [])
         EventLoop.flush()
         self.assertEqual(log, [99, DummyError,DummyError, types.TracebackType])

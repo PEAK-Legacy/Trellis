@@ -269,7 +269,7 @@ task_factory
 
 The task_factory creates a TaskCell::
 
-    >>> from peak.events.trellis import task_factory
+    >>> from peak.events.activity import task_factory
     >>> def f(self): yield 1; print "done"
     >>> CellRules(Test)['x'] = f
     >>> CellValues(Test)['x'] = NO_VALUE
@@ -330,7 +330,7 @@ Decorators
     ...     )
     ...     to_add = added.future
     ...     to_remove = removed.future
-    ...     decorate(task)
+    ...     decorate(activity.task)
     ...     def task(self): yield None
 
     >>> CellRules(Test)
@@ -360,7 +360,7 @@ Error messages::
     TypeError: @rule decorator must wrap a function directly
 
     >>> class Test:
-    ...     decorate(trellis.task, trellis.optional)
+    ...     decorate(activity.task, trellis.optional)
     ...     def wrong(): pass
     Traceback (most recent call last):
       ...
@@ -665,15 +665,15 @@ Multitasking
       ...
     Exception: foo
 
-    >>> trellis.resume()
+    >>> activity.resume()
     Traceback (most recent call last):
       ...
-    RuntimeError: resume() must be called from a @trellis.task
+    RuntimeError: resume() must be called from an @activity.task
 
     >>> def yielder(ob):
     ...     while not ob.bytes:
     ...         print "pausing"
-    ...         yield trellis.Pause
+    ...         yield activity.Pause
     ...     yield ob.bytes
 
     >>> def t():
@@ -681,10 +681,10 @@ Multitasking
     ...     yield 2
     ...     while 1:
     ...         yield yielder(lp);
-    ...         print "Got:", trellis.resume()
-    ...         yield trellis.Pause     # nothing changes unless we pause
+    ...         print "Got:", activity.resume()
+    ...         yield activity.Pause     # nothing changes unless we pause
 
-    >>> c = trellis.TaskCell(t)
+    >>> c = activity.TaskCell(t)
 
 
 Dictionaries
