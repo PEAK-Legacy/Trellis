@@ -1314,8 +1314,8 @@ def additional_tests():
     import doctest, sys
     files = [
         'README.txt', 'STM-Observer.txt', 'Activity.txt', 'Collections.txt',
-        'Internals.txt', 'Specification.txt',
-    ][(sys.version<'2.4')*4:]   # README.txt uses decorator syntax
+        'Internals.txt',
+    ][(sys.version<'2.4')*4:]   # All but Internals use decorator syntax
     return doctest.DocFileSuite(
         optionflags=doctest.ELLIPSIS|doctest.NORMALIZE_WHITESPACE, *files
     )

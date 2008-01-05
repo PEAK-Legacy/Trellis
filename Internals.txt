@@ -1055,3 +1055,190 @@ it gets recalculated first.
 so it immediately realizes it needs to recalculate.  X also notifies H first
 that a recalculation might be necessary.)
 
+
+Demos
+-----
+
+Circular calculations::
+
+    >>> F = Cell(lambda: C.value*1.8 + 32, 32)
+    >>> C = Cell(lambda: (F.value-32)/1.8, 0)
+    >>> F.value
+    32.0
+    >>> C.value
+    0.0
+    >>> F.value = 212
+    >>> C.value
+    100.0
+    >>> C.value = 0
+    >>> F.value
+    32.0
+    >>> C.value = -40
+    >>> F.value
+    -40.0
+
+    >>> def temp():
+    ...     if C.value<10:
+    ...         print "Brrrrr!"
+    >>> temp = Cell(temp)
+    >>> temp.value
+    Brrrrr!
+
+    >>> F.value = 212
+    >>> C.value
+    100.0
+    >>> F.value = 0
+    Brrrrr!
+    >>> C.value = 9
+    Brrrrr!
+    >>> F.value = 30
+    Brrrrr!    
+
+    >>> del temp
+
+Spreadsheet simulation::
+
+    >>> from UserDict import DictMixin, UserDict
+    >>> import sys
+    >>> class Spreadsheet(DictMixin, UserDict):
+    ...     def __init__(self, *args, **kw):
+    ...         self.data = {}
+    ...         for arg in args+(kw,): self.update(arg)
+    ...
+    ...     def __getitem__(self, key):
+    ...         return self.data[key][1].value
+    ...
+    ...     def __setitem__(self, key, value):
+    ...         def rule():
+    ...             value = self.data[key][0].value
+    ...             print "computing", value
+    ...             if sys.version>="2.4":
+    ...                 return eval(value, globals(), self)
+    ...             code = compile(value, '<string>', 'eval')
+    ...             d = dict([(k,self[k]) for k in code.co_names if k in self.data])
+    ...             return eval(code, globals(), d)
+    ...         if key in self.data:
+    ...             self.data[key][0].value = value
+    ...         else:
+    ...             self.data[key] = Cell(value=value), Cell(rule, None)
+
+    >>> ss = Spreadsheet()
+    >>> ss['a1'] ='5'
+    >>> ss['a2']='2*a1'
+    >>> ss['a3']='2*a2'
+    
+    >>> ss['a1']
+    computing 5
+    5
+    >>> ss['a2']
+    computing 2*a1
+    10
+
+    >>> ss['a1'] = '7'
+    computing 7
+    computing 2*a1
+
+    >>> ss['a1']
+    7
+    >>> ss['a2']
+    14
+    >>> ss['a3']
+    computing 2*a2
+    28
+
+    >>> ss['a1'] = '3'
+    computing 3
+    computing 2*a1
+    computing 2*a2
+
+Events::
+
+    >>> def last_ping():
+    ...     if ping.value is not None:
+    ...         print "ping", ping.value
+    ...         return ping.value
+    ...     return last_ping.value
+
+    >>> last_ping = Cell(last_ping)
+    >>> ping = Cell(discrete=True)
+
+    >>> print last_ping.value
+    None
+
+    >>> ping.value = 1
+    ping 1
+    >>> last_ping.value
+    1
+
+    >>> F.value = 27
+    >>> print ping.value    # value goes away as soon as something changes
+    None
+    >>> last_ping.value
+    1
+
+    >>> ping.value = 2     
+    ping 2
+    >>> last_ping.value
+    2
+    >>> ping.value = 2      # deps are recalculated even if value is same
+    ping 2
+
+    >>> F.value = 99
+    >>> print ping.value
+    None
+    >>> last_ping.value
+    2
+
+    
+Dynamic dependencies::
+
+    >>> def C_rule():
+    ...     print "computing",
+    ...     if A.value<5:
+    ...         print A.value, B.value
+    ...     else:
+    ...         print "...done"
+
+    >>> A = Cell(value=1)
+    >>> B = Cell(value=2)
+    >>> C = Cell(C_rule)
+
+    >>> C.value
+    computing 1 2
+    >>> C.value
+
+    >>> A.value = 3
+    computing 3 2
+
+    >>> B.value = 4
+    computing 3 4
+
+    >>> A.value = 5
+    computing ...done
+
+    >>> B.value = 6     # nothing happens, since C no longer depends on B
+    >>> A.value = 3
+    computing 3 6
+
+    >>> B.value = 7     # but now it's back depending on B again.
+    computing 3 7
+
+    >>> B.value = 7
+    >>> A.value = 1
+    computing 1 7
+
+    >>> A.value = 1
+
+
+Forcing a rule to repeat itself::
+
+    >>> from peak.events.trellis import repeat, ReadOnlyCell
+    >>> def counter():
+    ...     if counter.value == 10:
+    ...         return counter.value
+    ...     repeat()
+    ...     return counter.value + 1
+    >>> counter = ReadOnlyCell(counter, 1)
+    >>> counter.value
+    10
+
