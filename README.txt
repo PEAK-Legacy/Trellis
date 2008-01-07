@@ -2,6 +2,12 @@
 Event-Driven Programming The Easy Way, with ``peak.events.trellis``
 ===================================================================
 
+(NOTE: As of 0.6a1, many advanced parts of the Trellis API have changed
+significantly.  If you've done a lot with the 0.5 version API, we strongly
+suggest reading the new manuals, especially the parts dealing with state
+change.  Many old restrictions have been lifted, but some were replaced with
+new ones.)
+
 Whether it's an application server or a desktop application, any sufficiently
 complex system is event-driven -- and that usually means callbacks.
 
@@ -97,9 +103,17 @@ write conflict detection.  The Trellis also uses less memory for each cell
 (rule/value object), and offers many other features that either PyCells or
 Cellulose lack.
 
-The Trellis also boasts an extensive `Tutorial and Reference Manual`_, and
-can be `downloaded from the Python Package Index`_ or installed using
-`Easy Install`_.
+The Trellis package can can be `downloaded from the Python Package Index`_ or
+installed using `Easy Install`_, and it has a fair amount of documentation,
+including the following manuals:
+
+* `Developer's Guide and Tutorial`_ (Extensively revised for 0.6a1)
+
+* `Time, Event Loops, and Tasks`_ (NEW for 0.6a1)
+
+* `Event-Driven Collections with the Trellis`_ (NEW for 0.6a1)
+
+* `Software Transactional Memory (STM) And Observers`_ (NEW for 0.6a1)
 
 Questions, discussion, and bug reports for the Trellis should be directed to
 the `PEAK mailing list`_.
@@ -107,7 +121,10 @@ the `PEAK mailing list`_.
 .. _downloaded from the Python Package Index: http://pypi.python.org/pypi/Trellis#toc
 .. _Easy Install: http://peak.telecommunity.com/DevCenter/EasyInstall
 .. _PEAK mailing list: http://www.eby-sarna.com/mailman/listinfo/PEAK/
-.. _Tutorial and Reference Manual: http://peak.telecommunity.com/DevCenter/Trellis#toc
+.. _Developer's Guide and Tutorial: http://peak.telecommunity.com/DevCenter/Trellis#toc
+.. _Time, Event Loops, and Tasks: http://peak.telecommunity.com/DevCenter/TrellisActivity
+.. _Event-Driven Collections with the Trellis: http://peak.telecommunity.com/DevCenter/TrellisCollections
+.. _Software Transactional Memory (STM) And Observers: http://peak.telecommunity.com/DevCenter/TrellisSTM
 
 .. _toc:
 .. contents:: **Table of Contents**
@@ -1907,6 +1924,31 @@ you'll get an error message, instead of weird results.  But it still won't be a
 fun problem to debug, so it's highly recommended that you leave the garbage
 collection to Python.  Python always knows more about what's happening in your
 program than you do!
+
+
+------------------------
+Additional Documentation
+------------------------
+
+There's a lot more to the Trellis package than what's in this brief guide and
+tutorial.  Here are some links to other documentation provided with the
+package:
+
+`Time, Event Loops, and Tasks`_ (``Activity.txt`` in the source distribution)
+    This manual explains how to create generator-based pseudo-threads, schedule
+    activities for idle moments, integrate the Trellis with other event loops
+    (e.g. Twisted and wxPython), and implement things like timeouts, delays,
+    alarms, etc. in Trellis rules.
+
+
+`Event-Driven Collections with the Trellis`_ (``Collections.txt`` in the source)
+    This document provides a brief overview of some additional Trellis data
+    structures provided by the package, such as the ``SortedSet`` type.
+
+`Software Transactional Memory (STM) And Observers`_ (aka ``STM-Observer.txt``)
+    This document shows how some of the underlying Trellis pieces work, and
+    in future revisions, it'll include some hints on how to create your own
+    custom cell types, etc.
 
 
 ----------

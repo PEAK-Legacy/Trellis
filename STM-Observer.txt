@@ -11,6 +11,9 @@ types or other custom data structures, or if you just want to know how things
 work "under the hood".
 
 
+.. contents:: **Table of Contents**
+
+
 STM History
 ===========
 
@@ -368,6 +371,18 @@ them::
     >>> from peak.events import stm
 
 
+In addition, the observer framework supports calculating and caching the
+"safe recalculation order" of a network of subjects and listeners, so that
+listeners that modify other subjects are (generally) run before the listeners
+that depend on those subjects.  In the event that a listener modifies a subject
+that has already been read during a given recalculation, the recalculation
+order is adjusted, and the atomic operation's history is undone to the point
+where the modified subject was first read.  And, if two listeners interact
+in such a way that each is modifying something the other has read, then a
+``stm.CircularityError`` is raised, detailing what listeners were involved in
+the loop.
+
+
 Subjects, Listeners, and Links
 ------------------------------
 
@@ -419,5 +434,201 @@ You can also explicitly break a link by calling its ``.unlink()`` method::
 
 Normally, however, you will not create or manage links explicitly, as they
 are automatically managed by the controller.
+
+
+Subjects
+~~~~~~~~
+
+A subject is an object that represents some state.  In the Trellis, non-constant
+cells are usually subjects, and the ones that have rules may also be listeners.
+When a listener reads or writes a subject, the occurrence must be recorded with
+the active ``Controller`` (see the section below on `Controllers`_).  In the
+process, the subject's context manager (if any) gets registered with the
+controller to receive `commit/abort notices`_.
+
+The observer framework doesn't dictate what a subject actually "is"; it could
+be a very simple object (like a single-valued cell), or very complex.  The
+framework requires only that subjects:
+
+1. derive from ``AbstractSubject``
+2. have a read/write ``next_listener`` attribute (initially ``None``)
+3. have a working ``iter_listeners()`` method
+4. have a readable ``manager`` attribute (referencing a context manager or
+   ``None``), and
+5. have a readable ``layer`` attribute (usually equalling zero).
+
+And of course, that the ``Controller`` be notified whenever the subject is
+"read" or "changed".  (What "changed" means, exactly, is up to you, but
+in practical terms, it means that any rule that previously "read" the subject
+would need to be recalculated.)
+
+
+Listeners
+~~~~~~~~~
+
+A listener is an executable object that depends on and/or modifies subjects.
+In the Trellis, cells with rules (including observers) are listeners, and some
+are also subjects.
+
+Like subjects, listeners must have a ``layer`` attribute which starts out at
+zero.  However, on a listener this attribute must be writable, as a listener's
+layer number can grow over time to reflect the subjects and listeners it
+depends on.  The active ``Controller`` automatically increases a listener's
+layer number as needed to keep it higher than the layer number of any listeners
+whose output it depends on.  That is, if one listener "A" modifies a subject
+that listener "B" depends on, then listener B's layer number must be kept
+higher than A's.
+
+If a listener has a ``layer`` of ``peak.util.extremes.Max``, its calculation
+order is special: it will not run until all other listeners have run, and it
+will execute during a special "read-only" commit phase, during which no changes
+are allowed.  (This is how ``@trellis.observer`` rules and ``ObserverCell``
+objects work -- they simply use a ``Max`` layer number.)
+
+Unlike subjects, listeners do not need a ``manager`` attribute.  (Unless, of
+course, they are also subjects!)  Listeners *must*, however:
+
+1. derive from ``AbstractListener``
+2. be weak-referenceable (i.e. have a ``__weakref__`` slot or not use slots)
+3. have a read/write ``next_subject`` attribute (initially ``None``)
+4. have a working ``iter_subjects()`` method, and
+5. have a read/write ``layer`` attribute  (initially zero)
+
+In addition, they must have the following methods:
+
+run()
+    Perform the actual work of the listener.  In the case of cells with rules,
+    this method runs the rule and then sets the cell's value to the result,
+    flagging the cell changed if applicable.  (Your methods can of course do
+    pretty much whatever you want here.)
+
+dirty()
+    This method is called whenever a dependency (i.e. a subject that was read
+    by a previous invocation of ``run()``) has changed.  If it returns a true
+    value, the ``Controller`` will schedule the listener for recalculation.
+    If it returns a false value, the ``Controller`` will assume that the
+    listener will be responsible for its own recalculation.  The default
+    implementation of this method (in ``AbstractListener``) just returns
+    ``True``, but if you wanted to implement a cell that didn't eagerly
+    recalculate, you could simply set a flag and return ``False`` instead.
+    The ``TaskCell`` type, for example, uses the ``dirty()`` method to schedule
+    the task with the ``EventLoop`` service.
+
+
+
+Controllers
+-----------
+
+A ``Controller`` is a more sophisticated version of an ``STMHistory``, that
+also schedules and tracks the execution of listeners (rules) and what subjects
+they've read or changed.  The Trellis uses a per-thread ``Controller`` instance
+to implement cell recalculation.  Controller objects have the following
+additional methods and attributes, many of which must be invoked by subjects
+or listeners in order to record their activity effectively:
+
+lock(`subject`)
+    Register the ``.manager`` of the `subject` to receive `commit/abort
+    notices`_ -- basically equivalent to ``.manage(subject.manager)`` if
+    ``subject.manager`` is not ``None``.  When you write methods that modify
+    subjects, you should generally call this method first, in case its
+    ``manager`` is (for example) a lock that should be held while modifying
+    the subject.
+    
+used(`subject`)
+    Record that the `subject` was "used" (i.e., read) by the current listener,
+    if any.  (This method automatically calls ``lock(subject)`` to ensure that
+    the subject's context manager, if any, is activated first.)
+
+changed(`subject`)
+    Record that the `subject` was "changed" by the current listener or by
+    external code.  (This method calls ``lock(subject)`` to ensure that the
+    subject's context manager, if any, is activated first, but you should
+    still call ``lock(subject)`` before actually making a change.)
+    
+schedule(`listener`, `source_layer=None`)
+    Put `listener` on the recalculation schedule, to be recalculated when its
+    layer is reached.  If `source_layer` is specified, and it's greater or
+    equal than ``listener.layer``, ``listener.layer`` will be increased, and
+    if necessary, its position in the recalculation schedule will be adjusted.
+
+cancel(`listener`)
+    Remove `listener` from the recalculation schedule, if it's currently
+    scheduled.
+
+current_listener
+    The listener that is currently being ``run()``, or ``None`` if no listener
+    is currently executing.
+    
+readonly
+    ``True`` if the controller is currently in the read-only commit phase where
+    observers are run and changes are prohibited.  ``False`` at all other
+    times.
+
+initialize(`listener`)
+    Explicitly invoke a ``listener.run()`` in a controlled manner.  This is
+    normally used only when a listener must be run for the first time, and
+    its output must be **immediately** available.  (Otherwise, it would be
+    enough to ``schedule()`` it for later.)  Cells use this method when their
+    value is read and they have not been initialized.
+
+    During the run, the ``Controller`` pretends that the listener was run in
+    a **previous** recalculation, for purposes of determining which rules were
+    run (and therefore may need undoing in the event of an order change) in the
+    current calculation.  The how's and why's of this are fairly tedious: just
+    remember that if you are trying to have your listener run for the first
+    time so its dependencies can be initialized, you should use this method
+    to do it.  (Since simply calling ``listener.run()`` won't set the
+    ``current_listener`` or track dependencies correctly.)
+    
+Note that most of these methods and attributes are only usable while an
+atomic action is in effect.  (That is, when the ``.active`` attribute is true.)
+The only exceptions are ``schedule()`` and ``cancel()``.
+
+
+The Singleton Controller
+------------------------
+
+During normal Trellis operation, there is only one ``Controller`` instance,
+which is available as ``trellis.ctrl``.  It is actually an instance of a
+``LocalController`` subclass, which is a ``threading.local``.  That is, even
+though it is a single object, it has thread-specific state, allowing it to
+be used as a singleton even by multithreaded programs.
+
+As a shortcut, the ``trellis`` module exports the following methods to its
+main namespace, so that you can use them without the ``ctrl.`` prefix:
+
+* ``on_commit()``
+* ``on_undo()``
+* ``atomically()``
+* ``manage()``
+* ``savepoint()``
+* ``rollback_to()``
+* ``change_attr()``
+* ``schedule()``
+* ``cancel()``
+* ``lock()``
+* ``used()``
+* ``changed()``
+* ``initialize()``
+
+Thus, ``trellis.on_commit()`` is a convenience shorthand for
+``trellis.ctrl.on_commit()``.  (You must still refer to the ``ctrl`` object for
+access to attributes such as ``ctrl.current_listener``.)
+
+If you wish to replace the standard ``LocalController`` (e.g. for testing or
+a specialized application), you must use the ``trellis.install_controller()``
+function, which replaces the shortcuts with the methods of the provided object,
+and sets ``trellis.ctrl`` to the replacement object.
+
+(Of course, this will only be useful if you do it before any modules import
+their own copy of ``trellis.ctrl`` or any of the shortcuts, or if they always
+prefix their uses with ``trellis.``.  It's thus best if you install your
+custom controller very early in the life of your program, if possible.)
+
+
+Creating Custom Cell Types (TBD)
+--------------------------------
+
+TODO: write up AbstractCell, ConstantMixin, value/get_value/set_value, etc.
 
 

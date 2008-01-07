@@ -8,6 +8,9 @@ for use with the Trellis::
     >>> from peak.events import trellis, collections
 
 
+.. contents:: **Table of Contents**
+
+
 SortedSet
 ---------
 

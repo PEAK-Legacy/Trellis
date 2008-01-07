@@ -363,9 +363,9 @@ class TestController(unittest.TestCase):
         self.ctrl.rollback_to(sp)
         self.assertEqual(list(self.t0.iter_subjects()), [s3, self.s1])
 
-    def runAs(self, listener, rule, initialized=True):
+    def runAs(self, listener, rule):
         listener.run = rule
-        self.ctrl.run_rule(listener, initialized)
+        self.ctrl.run_rule(listener)
 
     d(a)
     def testIsRunningAndHasRan(self):
@@ -383,7 +383,7 @@ class TestController(unittest.TestCase):
             self.assertEqual(self.ctrl.current_listener, self.t1)
             self.assertEqual(self.ctrl.has_run, {})
         sp = self.ctrl.savepoint()
-        self.runAs(self.t1, rule, False)    # uninit'd rule
+        self.t1.run = rule; self.ctrl.initialize(self.t1)    # uninit'd rule
         self.assertEqual(self.ctrl.current_listener, None)
         self.assertEqual(self.ctrl.has_run, {})
 
@@ -508,7 +508,7 @@ class TestController(unittest.TestCase):
     d(a)
     def testNestedNoRetry(self):
         def rule0():
-            self.runAs(self.t1, rule1, False)
+            self.t1.run=rule1; self.ctrl.initialize(self.t1)
         def rule1():
             pass
         self.runAs(self.t2, rule1)
@@ -622,7 +622,7 @@ class TestController(unittest.TestCase):
             self.ctrl.changed(self.s2)
             self.assertEqual(self.ctrl.reads, {self.s1:1})
             self.assertEqual(self.ctrl.writes, {self.s2:self.t1})
-            self.runAs(self.t2, rule2, False)
+            self.t2.run=rule2; self.ctrl.initialize(self.t2)
             self.assertEqual(set(self.ctrl.has_run), set([self.t0, self.t1]))
             self.assertEqual(self.ctrl.current_listener, self.t1)
             self.assertEqual(self.ctrl.reads, {self.s1:1})

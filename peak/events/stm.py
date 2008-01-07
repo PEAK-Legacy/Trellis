@@ -341,7 +341,7 @@ class Controller(STMHistory):
             self.readonly = True
         try:
             assert listener not in self.has_run,"Re-run of rule without retry"
-
+            assert self.active, "Rules must be run atomically"
             if old is not None:
                 assert not initialized,"Only un-initialized rules can be nested"
                 old_reads, self.reads = self.reads, {}
@@ -381,7 +381,7 @@ class Controller(STMHistory):
             for dependent in subject.iter_listeners():
                 if dependent is not listener:
                     if dependent.dirty():
-                        self.schedule(dependent, layer, writer)
+                        self.schedule(dependent, layer) #, writer
                         notified[dependent] = 1
         if notified:
             self.on_undo(self._unrun, listener, notified)
@@ -408,7 +408,7 @@ class Controller(STMHistory):
             if undo: self.undo.append((link.unlink, ()))
 
 
-    def schedule(self, listener, source_layer=None, writer=None):
+    def schedule(self, listener, source_layer=None):
         """Schedule `listener` to run during an atomic operation
 
         If an operation is already in progress, it's immediately scheduled, and
@@ -516,11 +516,12 @@ class Controller(STMHistory):
         if self.readonly:
             raise RuntimeError("Can't change objects during commit phase")
 
+    def initialize(self, listener):
+        self.run_rule(listener, False)
+
 
 class LocalController(Controller, threading.local):
     """Thread-local Controller"""
-
-
 
 
 

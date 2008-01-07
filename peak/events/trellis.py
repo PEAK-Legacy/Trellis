@@ -8,7 +8,7 @@ __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
-    'Dict', 'List', 'Set', 'mark_dirty', 'ctrl',
+    'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin'
 ]
 
 NO_VALUE = symbols.Symbol('NO_VALUE', __name__)
@@ -155,7 +155,7 @@ def install_controller(controller):
     for name in [
         'on_commit', 'on_undo', 'atomically', 'manage', 'savepoint',
         'rollback_to', 'schedule', 'cancel', 'lock', 'used', 'changed',
-        'run_rule', 'change_attr',
+        'initialize', 'change_attr',
     ]:
         globals()[name] = getattr(ctrl, name)
         if name not in __all__: __all__.append(name)
@@ -180,7 +180,7 @@ class ReadOnlyCell(_ReadValue, stm.AbstractListener):
                 atomically(schedule, self)
                 return self._value
             else:
-                cancel(self); run_rule(self, False)
+                cancel(self); initialize(self)
         if ctrl.current_listener is not None:
             used(self)
         return self._value
@@ -213,20 +213,23 @@ class ReadOnlyCell(_ReadValue, stm.AbstractListener):
             change_attr(self, '__class__', ConstantRule)
 
 
-class _ConstantMixin(AbstractCell):
+class ConstantMixin(AbstractCell):
     """A read-only abstract cell"""
 
     __slots__ = ()
 
     def __setattr__(self, name, value):
         """Constants can't be changed"""
-        raise AttributeError("Constants can't be changed")
+        if name == '__class__':
+            object.__setattr__(self, name, value)
+        else:
+            raise AttributeError("Constants can't be changed")
 
     def __repr__(self):
         return "Constant(%r)" % (self.value,)
 
 
-class Constant(_ConstantMixin):
+class Constant(ConstantMixin):
     """A pure read-only value"""
 
     __slots__ = 'value'
@@ -241,10 +244,7 @@ class Constant(_ConstantMixin):
 
 
 
-
-
-
-class ConstantRule(_ConstantMixin, ReadOnlyCell):
+class ConstantRule(ConstantMixin, ReadOnlyCell):
     """A read-only cell that no longer depends on anything else"""
 
     __slots__ = ()
@@ -257,13 +257,6 @@ class ConstantRule(_ConstantMixin, ReadOnlyCell):
 
     def run(self):
         """Constants don't run"""
-
-    def __setattr__(self, name, value):
-        """Constants can't be changed"""
-        if name == '__class__':
-            object.__setattr__(self, name, value)
-        else:
-            super(ConstantRule, self).__setattr__(name, value)
 
 
 class ObserverCell(stm.AbstractListener, AbstractCell):
@@ -279,6 +272,13 @@ class ObserverCell(stm.AbstractListener, AbstractCell):
         atomically(schedule, self)
 
 ObserverCell.rule = ObserverCell.run    # alias the attribute for inspection
+
+
+
+
+
+
+
 
 
 
@@ -306,7 +306,7 @@ class Cell(ReadOnlyCell, Value):
                 return self._value
             if self._set_by is _sentinel:
                 # No value set yet, so we have to run() first
-                cancel(self); run_rule(self, False)
+                cancel(self); initialize(self)
         if ctrl.current_listener is not None:
             used(self)
         return self._value
@@ -598,7 +598,7 @@ class CellProperty(object):
         except AttributeError: cells = Cells(ob)
         if isinstance(value, AbstractCell):
             name = self.__name__
-            if name in cells and isinstance(cells[name], _ConstantMixin):
+            if name in cells and isinstance(cells[name], ConstantMixin):
                 raise AttributeError("Can't change a constant")
             cells[name] = value
         else:
