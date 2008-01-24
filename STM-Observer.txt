@@ -257,7 +257,7 @@ later::
 Commit Callbacks
 ----------------
 
-If you want to defer an action until the overal operation is ready to commit,
+If you want to defer an action until the overall operation is ready to commit,
 you can use the ``on_commit(func, *args)`` method::
 
     >>> def do_something(msg):
@@ -313,7 +313,7 @@ an error later in the commit process::
     caught exception
 
 And of course, commit actions are not run if an error occurs before they have
-a chance to run:
+a chance to run::
 
     >>> def do_no_commit():
     ...     hist.on_commit(do_something, "should not happen")

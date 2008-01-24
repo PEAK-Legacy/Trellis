@@ -402,7 +402,7 @@ poll()
 
 flush(`count=None`)
     Run up to `count` outstanding ``call()`` callbacks, if any are pending.  If
-    `count` is ``Non``, run all pending callbacks.
+    `count` is ``None``, run all pending callbacks.
 
 The ``poll()`` and ``flush()`` are mainly intended for your convenience when
 writing tests of code that would ordinarily be run inside an event loop.  In
@@ -473,7 +473,7 @@ You can check an event loop's status using its ``running`` and
 
 As you can see, the ``running`` attribute turns true once the event loop starts
 running.  When ``stop()`` is called, the ``stop_requested`` attribute becomes
-true, and then both ``running``and ``stop_requested`` return to their normal
+true, and then both ``running`` and ``stop_requested`` return to their normal
 values.
 
 
