@@ -2060,6 +2060,8 @@ Open Issues
 
   * The ``poll()`` and ``repeat()`` functions are undocumented in this release.
 
+  * It's a bad idea to use ``on_commit()`` for user-level operations
+
 TrellisDB
   * A system for processing relational-like records and "active queries" mapped
     from zero or more backend storage mechanism.

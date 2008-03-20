@@ -1242,3 +1242,81 @@ Forcing a rule to repeat itself::
     >>> counter.value
     10
 
+
+Sensors and Connectors
+----------------------
+
+    >>> class MyConnector(trellis.AbstractConnector):
+    ...     def connect(self, sensor):
+    ...         print "connecting", sensor
+    ...         return sensor
+    ...     def disconnect(self, key):
+    ...         print "disconnecting", key
+
+    >>> c = trellis.Cell(MyConnector())
+    >>> c
+    Sensor(<bound method MyConnector.read of...>, None [uninitialized])
+
+    >>> print c.value
+    None
+
+    >>> c2 = trellis.Cell(lambda: c.value)
+
+    >>> print c2.value
+    connecting Sensor(<bound method MyConnector.read of...>, None)
+    None
+
+    >>> c.receive(42)
+    >>> c.value
+    42
+    >>> c2.value
+    42
+
+    >>> del c2
+    disconnecting Sensor(<bound method MyConnector.read of...>, 42)
+
+
+Effectors
+---------
+
+    >>> some_global = 42
+
+    >>> class GlobalConnector(MyConnector):
+    ...     def read(self):
+    ...         print "reading"
+    ...         return some_global
+
+    >>> def writer(value):
+    ...     print "writing", value
+    ...     global some_global
+    ...     some_global = value
+
+    >>> c = trellis.Cell(GlobalConnector(), writer=writer)
+    >>> c.value
+    reading
+    42
+
+    >>> c2 = trellis.Cell(lambda: c.value)
+
+    >>> print c2.value
+    connecting Effector(<bound method GlobalConnector.read of...>, 42)
+    42
+
+    >>> c.value = 99
+    writing 99
+
+    >>> some_global
+    99
+
+    >>> c.value = 99
+
+    >>> some_global = 77
+    >>> c.receive(77)
+
+    >>> c2.value
+    77
+
+    >>> del c2
+    disconnecting Effector(<bound method GlobalConnector.read of...>, 77)
+
+

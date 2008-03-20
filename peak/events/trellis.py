@@ -1,24 +1,24 @@
 from thread import get_ident
 from weakref import ref
-from peak.util import symbols, addons, decorators
+from peak.util import addons, decorators
 import sys, UserDict, UserList, sets, stm
 from peak.util.extremes import Max
+from peak.util.symbols import Symbol, NOT_GIVEN
 
 __all__ = [
     'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
-    'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin'
+    'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin', 'Sensor',
+    'AbstractConnector', 'Connector',  'Effector',
+    # XXX 'Transmitter', 'ConnectionManager' ?
 ]
 
-NO_VALUE = symbols.Symbol('NO_VALUE', __name__)
+NO_VALUE = Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
 
 class InputConflict(Exception):
     """Attempt to set a cell to two different values during the same pulse"""
-
-
-
 
 
 
@@ -44,6 +44,7 @@ class AbstractCell(object):
     __slots__ = ()
 
     rule = value = _value = _needs_init = None
+    writer = connector = None
 
     def get_value(self):
         """Get the value of this cell"""
@@ -60,7 +61,6 @@ class AbstractCell(object):
         return '%s(%s%r%s%s)'% (
             self.__class__.__name__, rule, self._value, ni, reset
         )
-
 
 
 
@@ -285,64 +285,6 @@ ObserverCell.rule = ObserverCell.run    # alias the attribute for inspection
 
 
 
-class Cell(ReadOnlyCell, Value):
-    """Spreadsheet-like cell with automatic updating"""
-
-    __slots__ = ()
-
-    def __new__(cls, rule=None, value=_sentinel, discrete=False):
-        if value is _sentinel and rule is not None:
-            return ReadOnlyCell(rule, None, discrete)
-        elif rule is None:
-            return Value([value,None][value is _sentinel], discrete)
-        return ReadOnlyCell.__new__(cls, rule, value, discrete)
-
-    def _check_const(self): pass    # we can never become Constant
-
-    def get_value(self):
-        if self._needs_init:
-            if not ctrl.active:
-                atomically(schedule, self)  # initialization must be atomic
-                return self._value
-            if self._set_by is _sentinel:
-                # No value set yet, so we have to run() first
-                cancel(self); initialize(self)
-        if ctrl.current_listener is not None:
-            used(self)
-        return self._value
-
-    def set_value(self, value):
-        if not ctrl.active:
-            return atomically(self.set_value, value)
-        super(Cell, self).set_value(value)
-        if self._needs_init:
-            schedule(self)
-
-    value = property(get_value, set_value)
-
-    def dirty(self):
-        # If we've been manually set, don't reschedule
-        who = self._set_by
-        return who is _sentinel or who is self
-
-
-    def run(self):
-        if self.dirty():
-            # Nominal case: the value hasn't been set in this txn, or was only
-            # set by the rule itself.
-            super(Cell, self).run()
-        elif self._needs_init:
-            # Initialization case: value was set before reading, so we ignore
-            # the return value of the rule and leave our current value as-is,
-            # but of course now we will notice any future changes
-            change_attr(self, '_needs_init', False)
-            self.rule()
-        else:
-            # It should be impossible to get here unless you run the cell
-            # manually.  Don't do that.  :)
-            raise AssertionError("This should never happen!")
-
-
 def modifier(func):
     """Mark a function as performing modifications to Trellis data
 
@@ -365,6 +307,269 @@ def modifier(func):
                 __module.ctrl.reads = old_reads
         """
     return decorators.template_function(wrap)(func, sys.modules[__name__])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
+
+
+set_next_listener = ReadOnlyCell.next_listener.__set__
+get_next_listener = ReadOnlyCell.next_listener.__get__
+
+class SensorBase(ReadOnlyCell):
+    """Base for cells that connect to non-Trellis code"""
+
+    __slots__ = ()
+
+    def __init__(self, rule, value=None, discrete=False):
+        if isinstance(rule, AbstractConnector):
+            self.conn_manager = rule.conn_manager_for(self)
+            rule = rule.read
+        else:
+            self.conn_manager = None
+        set_next_listener(self, None)
+        super(SensorBase, self).__init__(rule, value, discrete)
+
+    def _set_listener(self, listener):
+        was_seen = get_next_listener(self) is not None
+        set_next_listener(self, listener)
+        if was_seen != (listener is not None) and self.conn_manager is not None:
+            atomically(schedule, self.conn_manager)
+
+    next_listener = property(get_next_listener, _set_listener)
+
+    _set_value = Value.set_value.im_func
+
+    decorators.decorate(modifier)
+    def receive(self, value):
+        self._set_value(value)
+
+    def _check_const(self): pass    # we can never become Constant
+
+
+class Sensor(SensorBase):
+    """A cell that can receive value callbacks from the outside world"""
+    __slots__ = 'conn_manager'
+
+
+
+
+class AbstractConnector(object):
+    """Base class for rules that connect to the outside world"""
+
+    __slots__ = ()
+
+    def read(self):
+        """Return a value from the outside source"""
+        # Just use the current/last received value by default
+        return ctrl.current_listener._value
+
+    def conn_manager_for(self, sensor):
+        return ConnectionManager(sensor, self)
+
+    def connect(self, sensor):
+        """Connect the sensor to the outside world, returning disconnect key
+
+        This method must arrange callbacks to ``sensor.receive(value)``, and
+        return an object suitable for use by ``disconnect()``.
+        """
+
+    def disconnect(self, key):
+        """Disconnect the key returned by ``connect()``"""
+
+
+class Connector(AbstractConnector):
+    """Trivial connector, wrapping three functions"""
+
+    __slots__ = "read", "connect", "disconnect"
+
+    def __init__(self, connect, disconnect, read=None):
+        if read is None:
+            read = lambda: ctrl.current_listener._value
+        self.read = read
+        self.connect = connect
+        self.disconnect = disconnect
+
+
+
+
+
+
+class ConnectionManager(stm.AbstractListener, AbstractCell):
+    """Cell that manages a sensor's input callback connection"""
+
+    __slots__ = 'sensor', 'connector', 'listening'
+    next_subject = None
+    layer = Max
+
+    def __init__(self, sensor, connector):
+        self.sensor = sensor
+        self.connector = connector
+        self.listening = NOT_GIVEN
+
+    def run(self):
+        sensor = self.sensor
+        listening = self.listening
+        if sensor.next_listener is not None:
+            if listening is NOT_GIVEN:
+                self.listening = self.connector.connect(sensor)
+        elif listening is not NOT_GIVEN:
+            self.connector.disconnect(listening)
+            self.listening = None
+
+
+class Transmitter(stm.AbstractListener, AbstractCell):
+    """Specialized cell that sends data out when changes are made"""
+
+    __slots__ = 'writer', 'value', #'layer'
+
+    next_subject = None
+    layer = Max
+
+    def __init__(self, writer, value):
+        self.writer = writer
+        self.value = value
+        self.layer = layer
+        atomically(schedule, self)
+
+    def run(self):
+        self.writer(self.value)
+
+
+class Cell(ReadOnlyCell, Value):
+    """Spreadsheet-like cell with automatic updating"""
+
+    __slots__ = ()
+
+    def __new__(cls, rule=None, value=_sentinel, discrete=False, writer=NOT_GIVEN):
+        v = [value,None][value is _sentinel]
+        if writer is not NOT_GIVEN:
+            return Effector(rule, value, discrete, writer)
+        if cls is Cell:
+            if isinstance(rule, AbstractConnector) and cls is Cell:
+                return Sensor(rule, v, discrete)            
+            elif value is _sentinel and rule is not None:
+                return ReadOnlyCell(rule, None, discrete)
+            elif rule is None:
+                return Value(v, discrete)
+        return ReadOnlyCell.__new__(cls, rule, value, discrete)
+
+    def _check_const(self):
+        pass    # we can never become Constant
+
+    def get_value(self):
+        if self._needs_init:
+            if not ctrl.active:
+                atomically(schedule, self)  # initialization must be atomic
+                return self._value
+            if self._set_by is _sentinel:
+                # No value set yet, so we have to run() first
+                cancel(self); initialize(self)
+        if ctrl.current_listener is not None:
+            used(self)
+        return self._value
+
+    def set_value(self, value):
+        if not ctrl.active:
+            return atomically(self.set_value, value)
+        super(Cell, self).set_value(value)
+        if self._needs_init:
+            schedule(self)
+
+
+    value = property(get_value, set_value)
+
+    def dirty(self):
+        # If we've been manually set, don't reschedule
+        who = self._set_by
+        return who is _sentinel or who is self
+
+    def run(self):
+        if self.dirty():
+            # Nominal case: the value hasn't been set in this txn, or was only
+            # set by the rule itself.
+            super(Cell, self).run()
+        elif self._needs_init:
+            # Initialization case: value was set before reading, so we ignore
+            # the return value of the rule and leave our current value as-is,
+            # but of course now we will notice any future changes
+            change_attr(self, '_needs_init', False)
+            self.rule()
+        else:
+            # It should be impossible to get here unless you run the cell
+            # manually.  Don't do that.  :)
+            raise AssertionError("This should never happen!")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class Effector(SensorBase, Cell):
+    """Sensor that can write back to the outside world without self-looping"""
+
+    __slots__ = 'writer', 'conn_manager'
+
+    def __new__(cls, rule, value=None, discrete=False, writer=NOT_GIVEN):
+        if writer is NOT_GIVEN:
+            return Sensor(rule, value, discrete)
+        return Cell.__new__(cls, rule, value, discrete)
+
+    def __init__(self, rule, value=None, discrete=False, writer=NOT_GIVEN):
+        if writer is NOT_GIVEN:
+            raise TypeError("writer must be specified")
+        self.writer = writer
+        super(Effector, self).__init__(rule, value, discrete)
+
+    def set_value(self, value):
+        if not ctrl.active:
+            return atomically(self.set_value, value)
+        lock(self)
+        before = self._value
+        super(Effector, self).set_value(value)
+        if value is not before and value != before:
+            Transmitter(self.writer, self.value)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class _Defaulting(addons.Registry):
