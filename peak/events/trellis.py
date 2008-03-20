@@ -428,7 +428,7 @@ class ConnectionManager(stm.AbstractListener, AbstractCell):
                 self.listening = self.connector.connect(sensor)
         elif listening is not NOT_GIVEN:
             self.connector.disconnect(listening)
-            self.listening = None
+            self.listening = NOT_GIVEN
 
 
 class Transmitter(stm.AbstractListener, AbstractCell):
@@ -442,11 +442,11 @@ class Transmitter(stm.AbstractListener, AbstractCell):
     def __init__(self, writer, value):
         self.writer = writer
         self.value = value
-        self.layer = layer
         atomically(schedule, self)
 
     def run(self):
         self.writer(self.value)
+
 
 
 class Cell(ReadOnlyCell, Value):
@@ -601,7 +601,7 @@ def default_factory(typ, ob, name, celltype=Cell):
     """Default factory for making cells"""
     rule = CellRules(typ).get(name)
     value = CellValues(typ).get(name, _sentinel)
-    if rule is not None:
+    if rule is not None and hasattr(rule,'__get__'):
         rule = rule.__get__(ob, typ)
     if value is _sentinel:
         if IsDiscrete(typ).get(name, False):
@@ -835,14 +835,14 @@ def _invoke_callback(
     if func is not _sentinel:
         if not isinstance(func, CellProperty):
             items.append((CellRules, func))
-        if func is not None and func.__name__!='<lambda>':
+        if func is not None and getattr(func,'__name__','<lambda>')!='<lambda>':
             name = name or func.__name__
 
     if value is not _sentinel:
         items.append((CellValues, value))
 
     def callback(frame, name, func, locals):
-        if func.__name__ == '<lambda>':
+        if getattr(func,'__name__',None) == '<lambda>':
             try: func.__name__ = name
             except TypeError: pass  # Python 2.3 doesn't let you set __name__
         for role, value in items:

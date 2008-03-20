@@ -1275,6 +1275,9 @@ Sensors and Connectors
     >>> del c2
     disconnecting Sensor(<bound method MyConnector.read of...>, 42)
 
+    >>> c.conn_manager.listening
+    NOT_GIVEN
+
 
 Effectors
 ---------
@@ -1318,5 +1321,25 @@ Effectors
 
     >>> del c2
     disconnecting Effector(<bound method GlobalConnector.read of...>, 77)
+
+
+
+    >>> class X(trellis.Component):
+    ...     g = trellis.rule(GlobalConnector())
+
+    >>> x = X()
+    reading
+
+    >>> x.g
+    77
+
+    >>> c2 = trellis.Cell(lambda: x.g)
+
+    >>> print c2.value
+    connecting Sensor(<bound method GlobalConnector.read of...>, 77)
+    77
+    
+    >>> del c2
+    disconnecting Sensor(<bound method GlobalConnector.read of...>, 77)
 
 
