@@ -1316,15 +1316,15 @@ def additional_tests():
         'README.txt', 'STM-Observer.txt', 'Activity.txt', 'Collections.txt',
         'Internals.txt',
     ][(sys.version<'2.4')*4:]   # All but Internals use decorator syntax
+    try:
+        from sqlalchemy.orm.attributes import ClassManager
+    except ImportError:
+        pass
+    else:
+        files.insert(0, 'SQLAlchemy.txt')
     return doctest.DocFileSuite(
         optionflags=doctest.ELLIPSIS|doctest.NORMALIZE_WHITESPACE, *files
     )
-
-
-
-
-
-
 
 
 

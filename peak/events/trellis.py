@@ -721,10 +721,10 @@ class Component(decorators.classy):
                     )
                 setattr(self, k, v)
 
-
-
-
-
+    decorators.decorate(staticmethod)
+    def __sa_instrumentation_manager__(cls):
+        from peak.events.sa_support import SAInstrument
+        return SAInstrument(cls)
 
 
 
