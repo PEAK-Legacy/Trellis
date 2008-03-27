@@ -11,7 +11,7 @@ __all__ = [
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
     'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin', 'Sensor',
     'AbstractConnector', 'Connector',  'Effector',
-    # XXX 'Transmitter', 'ConnectionManager' ?
+    # XXX 'ConnectionManager' ?
 ]
 
 NO_VALUE = Symbol('NO_VALUE', __name__)
@@ -45,6 +45,7 @@ class AbstractCell(object):
 
     rule = value = _value = _needs_init = None
     writer = connector = None
+    was_set = False
 
     def get_value(self):
         """Get the value of this cell"""
@@ -61,7 +62,6 @@ class AbstractCell(object):
         return '%s(%s%r%s%s)'% (
             self.__class__.__name__, rule, self._value, ni, reset
         )
-
 
 
 
@@ -106,14 +106,14 @@ class _ReadValue(stm.AbstractSubject, AbstractCell):
             change_attr(self, '_value', self._reset)
             changed(self)
 
-
-
-
-
-
-
-
-
+    decorators.decorate(property)
+    def was_set(self):
+        """True if value was set during this recalc"""
+        if ctrl.current_listener is None:
+            raise RuntimeError("was_set can only be accessed by a rule")
+        used(self)  
+        who = self._set_by
+        return who is not _sentinel and who is not self
 
 
 
@@ -355,16 +355,21 @@ class SensorBase(ReadOnlyCell):
 
     decorators.decorate(modifier)
     def receive(self, value):
+        if not ctrl.active:
+            return atomically(self.receive, value)            
+        lock(self)
+        if self._set_by is not _sentinel:
+            raise RuntimeError("Cell already set or calculated")
         self._set_value(value)
+        change_attr(self, '_set_by', self)
 
     def _check_const(self): pass    # we can never become Constant
+
 
 
 class Sensor(SensorBase):
     """A cell that can receive value callbacks from the outside world"""
     __slots__ = 'conn_manager'
-
-
 
 
 class AbstractConnector(object):
@@ -403,11 +408,6 @@ class Connector(AbstractConnector):
         self.connect = connect
         self.disconnect = disconnect
 
-
-
-
-
-
 class ConnectionManager(stm.AbstractListener, AbstractCell):
     """Cell that manages a sensor's input callback connection"""
 
@@ -431,21 +431,21 @@ class ConnectionManager(stm.AbstractListener, AbstractCell):
             self.listening = NOT_GIVEN
 
 
-class Transmitter(stm.AbstractListener, AbstractCell):
-    """Specialized cell that sends data out when changes are made"""
 
-    __slots__ = 'writer', 'value', #'layer'
 
-    next_subject = None
-    layer = Max
 
-    def __init__(self, writer, value):
-        self.writer = writer
-        self.value = value
-        atomically(schedule, self)
 
-    def run(self):
-        self.writer(self.value)
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -454,13 +454,13 @@ class Cell(ReadOnlyCell, Value):
 
     __slots__ = ()
 
-    def __new__(cls, rule=None, value=_sentinel, discrete=False, writer=NOT_GIVEN):
+    def __new__(cls, rule=None, value=_sentinel, discrete=False):
         v = [value,None][value is _sentinel]
-        if writer is not NOT_GIVEN:
-            return Effector(rule, value, discrete, writer)
         if cls is Cell:
             if isinstance(rule, AbstractConnector) and cls is Cell:
-                return Sensor(rule, v, discrete)            
+                if value is _sentinel:
+                    return Sensor(rule, v, discrete)
+                return Effector(rule, value, discrete)
             elif value is _sentinel and rule is not None:
                 return ReadOnlyCell(rule, None, discrete)
             elif rule is None:
@@ -514,51 +514,10 @@ class Cell(ReadOnlyCell, Value):
             raise AssertionError("This should never happen!")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class Effector(SensorBase, Cell):
-    """Sensor that can write back to the outside world without self-looping"""
+    """Writable Sensor"""
 
-    __slots__ = 'writer', 'conn_manager'
-
-    def __new__(cls, rule, value=None, discrete=False, writer=NOT_GIVEN):
-        if writer is NOT_GIVEN:
-            return Sensor(rule, value, discrete)
-        return Cell.__new__(cls, rule, value, discrete)
-
-    def __init__(self, rule, value=None, discrete=False, writer=NOT_GIVEN):
-        if writer is NOT_GIVEN:
-            raise TypeError("writer must be specified")
-        self.writer = writer
-        super(Effector, self).__init__(rule, value, discrete)
-
-    def set_value(self, value):
-        if not ctrl.active:
-            return atomically(self.set_value, value)
-        lock(self)
-        before = self._value
-        super(Effector, self).set_value(value)
-        if value is not before and value != before:
-            Transmitter(self.writer, self.value)
-
-
-
-
+    __slots__ = 'conn_manager'
 
 
 

@@ -1289,20 +1289,23 @@ Effectors
     ...         print "reading"
     ...         return some_global
 
-    >>> def writer(value):
-    ...     print "writing", value
-    ...     global some_global
-    ...     some_global = value
-
-    >>> c = trellis.Cell(GlobalConnector(), writer=writer)
+    >>> c = trellis.Cell(GlobalConnector(), None)
     >>> c.value
     reading
     42
 
+    >>> def writer():
+    ...     if c.was_set:
+    ...         print "writing", c.value
+    ...         global some_global
+    ...         some_global = c.value
+
+    >>> writer = trellis.ObserverCell(writer)
+    connecting Effector(<bound method GlobalConnector.read of...>, 42)
+
     >>> c2 = trellis.Cell(lambda: c.value)
 
     >>> print c2.value
-    connecting Effector(<bound method GlobalConnector.read of...>, 42)
     42
 
     >>> c.value = 99
@@ -1319,7 +1322,7 @@ Effectors
     >>> c2.value
     77
 
-    >>> del c2
+    >>> del c2, writer
     disconnecting Effector(<bound method GlobalConnector.read of...>, 77)
 
 
