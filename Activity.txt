@@ -155,11 +155,11 @@ boolean (truth) value::
 And of course, you can use this boolean test in a rule, to trigger some action::
 
     >>> class AlarmClock(trellis.Component):
-    ...     trellis.values(timeout = None)
+    ...     timeout = trellis.variable(None)
+    ...     trellis.maintain()
     ...     def alert(self):
     ...         if self.timeout:
     ...             print "timed out!"
-    ...     alert = trellis.rule(alert)
 
     >>> clock = AlarmClock(timeout=Time[20])
     >>> Time.advance(15)
@@ -181,13 +181,13 @@ create an "elapsed" timer, and trigger when a certain amount of time has
 passed::
 
     >>> class Elapsed(trellis.Component):
-    ...     trellis.values(duration = 20)
-    ...     trellis.rules(has_run_for = lambda self: Time[0])
-    ...
+    ...     duration = trellis.variable(20)
+    ...     has_run_for = trellis.maintain(lambda self: Time[0])
+    ...     trellis.maintain()
     ...     def alarm(self):
     ...         if self.has_run_for[self.duration]:
     ...             print "timed out!"
-    ...     alarm = trellis.rule(alarm)
+
 
     >>> t = Elapsed()       # Capture a start time
     >>> Time.advance(15)    # duration is 20, so no alarm yet
@@ -212,19 +212,18 @@ amount of time that some condition has been true (or false).  For example, how
 long a process has been idle (or busy)::
 
     >>> class IdleTimer(trellis.Component):
-    ...     trellis.values(
-    ...         idle_for = activity.NOT_YET,
+    ...     trellis.variable.attributes(
     ...         idle_timeout = 20,
     ...         busy = False,
     ...     )
-    ...     trellis.rules(
-    ...         idle_for = lambda self:
-    ...             self.idle_for.begins_with(not self.busy)
+    ...     idle_for = trellis.compute(
+    ...         lambda self: self.idle_for.begins_with(not self.busy),
+    ...         initially = activity.NOT_YET
     ...     )
+    ...     trellis.maintain()
     ...     def alarm(self):
     ...         if self.idle_for[self.idle_timeout]:
     ...             print "timed out!"
-    ...     alarm = trellis.rule(alarm)
 
 The way this code works, is that initially the ``idle_for`` timer is equal to
 the special ``NOT_YET`` value, representing a moment that will never be
@@ -520,7 +519,7 @@ you can get it to run across multiple trellis recalculations, retaining its
 state along the way.  For example::
 
     >>> class TaskExample(trellis.Component):
-    ...     trellis.values(
+    ...     trellis.variable.attributes(
     ...         start = False,
     ...         stop = False
     ...     )
@@ -586,7 +585,7 @@ Tasks can invoke or "call" other generators by yielding them.  For example, we
 can rewrite our example like this, for more modularity::
 
     >>> class TaskExample(trellis.Component):
-    ...     trellis.values(
+    ...     trellis.variable.attributes(
     ...         start = False,
     ...         stop = False
     ...     )
@@ -785,7 +784,7 @@ straightforward to wrap its API in an ``EventLoop`` implementation.  Here are
 the attributes and methods you'll need to implement:
 
 _ticker
-    This should be a ``@trellis.observer`` that only executes when the
+    This should be a ``@trellis.perform`` rule that only executes when the
     event loop is running, and handles scheduling for ``Time.tick()`` calls.
     When ``self._next_time`` is not ``None``, it is a value indicating the
     number of seconds until the next scheduled event, and you should arrange
@@ -814,7 +813,7 @@ Let's take a look at an example implementation::
     >>> class MyEventLoop(activity.EventLoop):
     ...     context.replaces(activity.EventLoop)    # <-- must have this line!
     ...
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def _ticker(self):
     ...         if self.running:
     ...             if Time.auto_update:

@@ -335,10 +335,11 @@ class Controller(STMHistory):
 
     def run_rule(self, listener, initialized=True):
         """Run the specified listener"""
+        if listener.layer is Max and not self.readonly:
+            return self.with_readonly(self.run_rule, listener, initialized)
+
         old = self.current_listener
         self.current_listener = listener
-        if listener.layer is Max:
-            self.readonly = True
         try:
             assert listener not in self.has_run,"Re-run of rule without retry"
             assert self.active, "Rules must be run atomically"
@@ -365,8 +366,7 @@ class Controller(STMHistory):
                     raise
         finally:
             self.current_listener = old
-            self.readonly = False
-
+            
     def _process_writes(self, listener):
         #
         # Remove changed items from self.writes and notify their listeners,
@@ -513,21 +513,21 @@ class Controller(STMHistory):
             for listener in subject.iter_listeners():
                 if listener.dirty():
                     self.schedule(listener)
-        if self.readonly:
-            raise RuntimeError("Can't change objects during commit phase")
+        if self.readonly and subject is not cl:
+            raise RuntimeError("Can't change objects during @perform or @compute")
 
     def initialize(self, listener):
         self.run_rule(listener, False)
 
+    def with_readonly(self, func, *args):
+        if self.readonly:
+            return func(*args)
+        else:
+            self.readonly = True
+            try:     return func(*args)
+            finally: self.readonly = False
 
 class LocalController(Controller, threading.local):
     """Thread-local Controller"""
-
-
-
-
-
-
-
 
 

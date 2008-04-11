@@ -99,24 +99,24 @@ if testreactor:
             EventLoop.call(log.append, 4)
 
             class IdleTimer(trellis.Component):
-                trellis.values(
-                    idle_for = NOT_YET,
+                trellis.variable.attributes(
                     idle_timeout = 20,
                     busy = False,
                 )
-                trellis.rules(
-                    idle_for = lambda self:
-                        self.idle_for.begins_with(not self.busy)
+                idle_for = trellis.compute(
+                    lambda self: self.idle_for.begins_with(not self.busy),
+                    initially=NOT_YET
                 )
+                trellis.maintain()  # XXX should be perform
                 def alarm(self):
                     if self.idle_for[self.idle_timeout] and EventLoop.running:
                         log.append(5)
                         EventLoop.stop()
-                alarm = trellis.rule(alarm)
 
             it = IdleTimer()
             EventLoop.run()
             self.assertEqual(log, [1,2,3,4,5])
+
 
 
 
@@ -395,7 +395,15 @@ class TestController(unittest.TestCase):
         self.ctrl.rollback_to(sp)
         self.assertEqual(self.ctrl.queues, {})
 
-
+    def testNestedReadOnly(self):
+        log = []
+        def aRule():
+            log.append(trellis.ctrl.readonly)
+            return 1
+        c1 = trellis.Cell(aRule)
+        c2 = trellis.Cell(lambda: c1.value * aRule())
+        c3 = trellis.ObserverCell(lambda: c2.value)
+        self.assertEqual(log, [True, True])        
 
 
 
@@ -1190,7 +1198,7 @@ class TestTasks(unittest.TestCase):
     def testPauseAndCall(self):
         log = []
         class TaskExample(trellis.Component):
-            trellis.values(
+            trellis.variable.attributes(
                 start = False,
                 stop = False
             )
@@ -1205,7 +1213,7 @@ class TestTasks(unittest.TestCase):
                     log.append("waiting to stop")
                     yield activity.Pause
         
-            d(activity.task)
+            activity.task()
             def demo(self):
                 yield self.wait_for_start()
                 log.append("starting")

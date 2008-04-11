@@ -11,19 +11,14 @@ __all__ = [
 class SubSet(trellis.Set):
     """Set that's constrained to be a subset of another set"""
 
-    trellis.values(
-        base = None
-    )
-    trellis.rules(
-        base = lambda self: trellis.Set()
-    )
+    base = trellis.compute(lambda self: trellis.Set(), writable=True)
 
-    decorators.decorate(trellis.rule)
+    trellis.compute()
     def added(self):
         base = self.base
         return set([item for item in self._added if item in base])
 
-    decorators.decorate(trellis.rule)
+    trellis.compute()
     def removed(self):
         base = self.base
         if self.base.removed:
@@ -39,17 +34,18 @@ class SubSet(trellis.Set):
 
 
 
+
+
+
+
+
 class Observing(trellis.Component):
     """Monitor a set of keys for changes"""
-    trellis.values(
-        lookup_func = lambda x:x,
-        changes = {},
-        watched_values = ({}, {}),
-        _watching = None
-    )
-    keys = trellis.rule(lambda self: trellis.Set())
 
-    decorators.decorate(trellis.rule)
+    lookup_func = trellis.variable(lambda x:x)
+    keys = trellis.compute(lambda self: trellis.Set())
+
+    trellis.maintain()
     def _watching(self):
         cells = self._watching or {}
         for k in self.keys.removed:
@@ -64,13 +60,13 @@ class Observing(trellis.Component):
             trellis.mark_dirty()
         return cells
 
-    decorators.decorate(trellis.rule)
+    trellis.maintain(initially=({}, {}))
     def watched_values(self):
         forget, old = self.watched_values
         lookup = self.lookup_func
         return old, dict([(k, v.value) for k,v in self._watching.iteritems()])
         
-    decorators.decorate(trellis.discrete)
+    trellis.maintain(resetting_to={})
     def changes(self):
         old, current = self.watched_values
         changes = {}
@@ -79,20 +75,23 @@ class Observing(trellis.Component):
                 if k not in old or v!=old[k]:
                     changes[k] = v, old.get(k, v)
         return changes
-        
+
+
+
+
+
 class SortedSet(trellis.Component):
     """Represent a set as a list sorted by a key"""
 
-    trellis.values(
-        data = None,
+    trellis.variable.attributes(
         sort_key  = lambda x:x,  # sort on the object
         reverse = False,
         items = None,
         old_key = None,
         old_reverse = None
     )
-    data    = trellis.rule(lambda self: trellis.Set())
-    changes = trellis.receiver([])
+    data    = trellis.compute(lambda self: trellis.Set(), writable=True)
+    changes = trellis.variable(resetting_to=[])
 
     def __getitem__(self, key):
         if self.reverse:
@@ -102,7 +101,7 @@ class SortedSet(trellis.Component):
     def __len__(self):
         return len(self.items)
 
-    decorators.decorate(trellis.rule)
+    trellis.maintain()
     def state(self):
         key, reverse = self.sort_key, self.reverse
         data = self.items
@@ -120,6 +119,7 @@ class SortedSet(trellis.Component):
 
     def __repr__(self):
         return repr(list(self))
+
 
     def compute_changes(self, key, items, reverse):
         changes = [

@@ -50,15 +50,15 @@ Here's a super-trivial example::
     >>> from peak.events import trellis
 
     >>> class TempConverter(trellis.Component):
-    ...     trellis.values(
-    ...         F = 32,
-    ...         C = 0,
+    ...     F = trellis.maintain(
+    ...         lambda self: self.C * 1.8 + 32,
+    ...         initially = 32
     ...     )
-    ...     trellis.rules(
-    ...         F = lambda self: self.C * 1.8 + 32,
-    ...         C = lambda self: (self.F - 32)/1.8,
+    ...     C = trellis.maintain(
+    ...         lambda self: (self.F - 32)/1.8,
+    ...         initially = 0
     ...     )
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def show_values(self):
     ...         print "Celsius......", self.C
     ...         print "Fahrenheit...", self.F
@@ -150,27 +150,27 @@ To define a simple cell attribute, you can use the ``trellis.rules()`` and
 ``trellis.values()`` functions inside the class body to define multiple rules
 and values.  Or, you can use the ``@trellis.rule`` decorator to turn an
 individual function into a rule, or define a single value attribute by calling
-``trellis.value``.  Last, but not least, you can use ``@trellis.observer`` to
+``trellis.value``.  Last, but not least, you can use ``@trellis.perform`` to
 define a rule that performs actions outside the Trellis.  Here's an example
 that uses all of these approaches, simply for the sake of illustration::
 
     >>> class Rectangle(trellis.Component):
-    ...     trellis.values(
+    ...     trellis.variable.attributes(
     ...         top = 0,
     ...         width = 20,
     ...     )
-    ...     left = trellis.value(0)
-    ...     height = trellis.value(30)
+    ...     left = trellis.variable(0)
+    ...     height = trellis.variable(30)
     ...
-    ...     trellis.rules(
+    ...     trellis.compute.attributes(
     ...         bottom = lambda self: self.top + self.height,
     ...     )
     ...
-    ...     @trellis.rule
+    ...     @trellis.compute
     ...     def right(self):
     ...         return self.left + self.width
     ...
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def show(self):
     ...         print self
     ...
@@ -238,7 +238,7 @@ That's because of two important Trellis principles:
 
 1. When a ``Component`` instance is created, all its "non-optional" cell
    attributes are calculated after initialization is finished.  That is,
-   if the attribute has a rule or is an observer, the function is invoked,
+   if the attribute has a rule or is a ``@perform``, the function is invoked,
    and the result is used to determine the cell's initial value.
 
 2. While a cell's rule is running, *any* trellis Cell whose value is looked at
@@ -286,7 +286,7 @@ you can use trellis rules to create attributes that are automatically
 initialized, but then keep the same value thereafter::
 
     >>> class Demo(trellis.Component):
-    ...     aDict = trellis.rule(lambda self: {})
+    ...     aDict = trellis.compute(lambda self: {})
 
     >>> d = Demo()
     >>> d.aDict
@@ -324,7 +324,7 @@ when a component is created.
 Observers vs. Rules
 -------------------
 
-You may have notice that we're using ``@trellis.observer`` to define rules that
+You may have notice that we're using ``@trellis.perform`` to define rules that
 print things out, and ``@trellis.rule`` for rules that calculate things.
 
 We'll explain how and why this works later on.  For right now, just learn this
@@ -361,8 +361,7 @@ Let's turn it into an "optional" observer, so that it won't run unless we ask
 it to::
 
     >>> class QuietRectangle(Rectangle):
-    ...     @trellis.optional
-    ...     @trellis.observer
+    ...     @trellis.perform(optional=True)
     ...     def show(self):
     ...         print self
 
@@ -409,9 +408,9 @@ For that matter, you don't even need to define the rule in the same class!
 For example::
 
     >>> class Viewer(trellis.Component):
-    ...     trellis.values(model = None)
+    ...     model = trellis.variable(None)
     ...
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def view_it(self):
     ...         if self.model is not None:
     ...             print self.model
@@ -489,12 +488,11 @@ input changes more than a certain threshhold since the last value.  It's fairly
 easy to do this, using rules that refer to their previous value::
 
     >>> class NoiseFilter(trellis.Component):
-    ...     trellis.values(
+    ...     trellis.variable.attributes(
     ...         value = 0,
     ...         threshhold = 5,
-    ...         filtered = 0
     ...     )
-    ...     @trellis.rule
+    ...     @trellis.compute(initially=0)
     ...     def filtered(self):
     ...         if abs(self.value - self.filtered) > self.threshhold:
     ...             return self.value
@@ -547,15 +545,19 @@ sort of like an "event", "message", or "command" in a GUI or other event-driven
 system::
 
     >>> class ChangeableRectangle(QuietRectangle):
-    ...     trellis.receivers(
+    ...     trellis.variable.attributes.resetting_to(
     ...         wider    = 0,
     ...         narrower = 0,
     ...         taller   = 0,
     ...         shorter  = 0
     ...     )
-    ...     trellis.rules(
-    ...         width  = lambda self: self.width  + self.wider - self.narrower,
-    ...         height = lambda self: self.height + self.taller - self.shorter,
+    ...     width = trellis.maintain(
+    ...         lambda self: self.width  + self.wider - self.narrower,
+    ...         initially = 20
+    ...     )
+    ...     height = trellis.maintain(
+    ...         lambda self: self.height + self.taller - self.shorter,
+    ...         initially = 30
     ...     )
 
     >>> c = ChangeableRectangle()
@@ -625,9 +627,9 @@ rectangle::
 
     >>> class Spinner(trellis.Component):
     ...     """Increase or decrease a value"""
-    ...     increase = trellis.receiver(0)
-    ...     decrease = trellis.receiver(0)
-    ...     by = trellis.value(1)
+    ...     increase = trellis.variable(resetting_to=0)
+    ...     decrease = trellis.variable(resetting_to=0)
+    ...     by = trellis.variable(1)
     ...
     ...     def up(self):
     ...         self.increase = self.by
@@ -690,9 +692,9 @@ example, if you create a text editing widget for a GUI application, you can
 define a value cell for the text in its class::
 
     >>> class TextEditor(trellis.Component):
-    ...     text = trellis.value('')
+    ...     text = trellis.variable('')
     ...
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def display(self):
     ...         print "updating GUI to show", repr(self.text)
 
@@ -722,10 +724,10 @@ Let's look at an example.  Suppose you'd like to trigger an action whenever a
 new high temperature is seen::
 
     >>> class HighDetector(trellis.Component):
-    ...     value = trellis.value(0)
-    ...     last_max = trellis.value(None)
+    ...     value = trellis.variable(0)
+    ...     last_max = trellis.variable(None)
     ...
-    ...     @trellis.rule
+    ...     @trellis.maintain
     ...     def new_high(self):
     ...         last_max = self.last_max
     ...         if last_max is None:
@@ -736,7 +738,7 @@ new high temperature is seen::
     ...             return True
     ...         return False
     ...
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def monitor(self):
     ...         if self.new_high:
     ...             print "New high"
@@ -777,12 +779,11 @@ automatically reset to a default value as soon as all their observers have
 "seen" the original value.  Let's try a discrete version of the same thing::
 
     >>> class HighDetector2(HighDetector):
-    ...     new_high = trellis.value(False)
     ...
-    ...     @trellis.discrete
+    ...     @trellis.maintain(resetting_to=False)
     ...     def new_high(self):
     ...         # this is a bit like a super() call, but for a rule:
-    ...         return trellis.CellRules(HighDetector)['new_high'](self)
+    ...         return HighDetector.new_high.rule(self)
     
     >>> hd = HighDetector2()
 
@@ -810,14 +811,13 @@ other value::
     >>> hd.new_high
     False
 
-By the way, that ``trellis.CellRules(HighDetector)['new_high']`` in the new
-``new_high`` rule retrieves the base class version of the rule.  We could also
-have done the same thing this way::
+By the way, that ``HighDetector.new_high.rule`` in the new ``new_high`` rule
+retrieves the base class version of the rule.  We could also have done the same
+thing this way::
 
     >>> class HighDetector2(HighDetector):
-    ...     new_high = trellis.value(False)
-    ...     new_high = trellis.discrete(
-    ...         trellis.CellRules(HighDetector)['new_high']
+    ...     new_high = trellis.maintain(
+    ...         HighDetector.new_high.rule, resetting_to = False
     ...     )
 
 and the result would have been the same, except it would run faster since the
@@ -1036,13 +1036,13 @@ dependency.  In fact, if you set a cell value from more than one rule, the
 Trellis will stop you, unless the values are equal.  For example::
 
     >>> class Conflict(trellis.Component):
-    ...     value = trellis.value(99)
+    ...     value = trellis.variable(99)
     ...
-    ...     @trellis.rule
+    ...     @trellis.maintain
     ...     def ruleA(self):
     ...         self.value = 22
     ...
-    ...     @trellis.rule
+    ...     @trellis.maintain
     ...     def ruleB(self):
     ...         self.value = 33
 
@@ -1114,9 +1114,9 @@ inputs.  For example::
     >>> import sys
     
     >>> class ChangeTakesTime(trellis.Component):
-    ...     v1 = trellis.value(2)
-    ...     v2 = trellis.rule(lambda self: self.v1*2)
-    ...     @trellis.rule
+    ...     v1 = trellis.variable(2)
+    ...     v2 = trellis.compute(lambda self: self.v1*2)
+    ...     @trellis.maintain
     ...     def update(self):
     ...         if self.v1!=3:
     ...             print "before", self.v1, self.v2
@@ -1206,7 +1206,7 @@ change is taking place they temporarily become non-empty.  For example::
     >>> view.model = None
 
     >>> class Dumper(trellis.Component):
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def dump(self):
     ...         for name in 'added', 'changed', 'deleted':
     ...             if getattr(d, name):
@@ -1283,7 +1283,7 @@ Similar to the ``Dict`` type, the ``Set`` type offers receiver set attributes,
     >>> view.model = None
 
     >>> class Dumper(trellis.Component):
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def dump(self):
     ...         for name in 'added', 'removed':
     ...             if getattr(s, name):
@@ -1347,7 +1347,7 @@ Only in rule code will you ever see it true, a moment before it becomes false::
     >>> view.model = None   # quiet, please
 
     >>> class Watcher(trellis.Component):
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def dump(self):
     ...         print myList.changed
 
@@ -1489,7 +1489,7 @@ update an existing data structure::
     ...     added = trellis.todo(lambda self: [])
     ...     to_add = added.future
     ...
-    ...     @trellis.rule
+    ...     @trellis.compute
     ...     def items(self):
     ...         items = self.items
     ...         if items is None:
@@ -1516,7 +1516,7 @@ Notice, by the way, that the ``items`` rule returns a new list every time there
 is a change.  If it didn't, the updates wouldn't be tracked::
 
     >>> class Queue3(Queue2):
-    ...     @trellis.rule
+    ...     @trellis.compute
     ...     def items(self):
     ...         items = self.items
     ...         if items is None:
@@ -1546,7 +1546,7 @@ so that if the trellis needs to roll back some calculations involving your data
 structure, it can do so::
 
     >>> class Queue4(Queue2):
-    ...     @trellis.rule
+    ...     @trellis.compute
     ...     def items(self):
     ...         items = self.items
     ...         if items is None:
@@ -1863,30 +1863,6 @@ soon as the current modifier is complete and any normal rules are finished.  It
 will then be re-executed in the future, after any cells or other trellis-
 managed data structures it depended on are changed.  (As long as the
 ObserverCell isn't garbage collected, of course.)
-
-
-Cell Attribute Metadata
------------------------
-
-The various decorators and APIs that set up cell attributes in components all
-work by registering metadata for the enclosing class.  This metadata can be
-accessed using various ``peak.util.roles.Registry`` objects.  (See the
-documentation of the ``ObjectRoles`` package at the Python Package Index for
-more info on registries.)
-
-In the current version of the Trellis library, these registries should mostly
-be considered implementation details; they are not officially documented and
-may change in a future release.  However, if you need to be able to access a
-superclass' definition of a rule, you can do so using the ``CellRules``
-registry::
-
-    >>> trellis.CellRules(NoiseFilter)
-    {'filtered': <function filtered at 0x...>}
-
-As you can see, calling ``trellis.CellRules(sometype)`` will return you a
-dictionary of rules for that type.  You can then pull out the definition you
-need and call it.  This particular registry should be a relatively stable API
-across releases.
 
 
 Garbage Collection

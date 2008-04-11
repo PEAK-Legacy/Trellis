@@ -123,14 +123,14 @@ NOT_YET = _Timer(Max)
 
 class EventLoop(trellis.Component, context.Service):
     """Run an application event loop"""
-    trellis.values(
+    trellis.variable.attributes(
         running = False,
-        stop_requested = False, _call_queue = None
+        stop_requested = False,
     )
-    trellis.rules(
-        _call_queue = lambda self: [],
-        _next_time = lambda self: Time.next_event_time(True),
-    )
+
+    _call_queue = trellis.compute(lambda self: [], writable=True)
+    _next_time = trellis.compute(lambda self: Time.next_event_time(True))
+
     _callback_active = initialized = False
 
     def run(self):
@@ -250,6 +250,7 @@ class TwistedEventLoop(EventLoop):
     context.replaces(EventLoop)    
     reactor = _delayed_call = None
 
+    trellis.perform()
     def _ticker(self):
         if self.running:
             if Time.auto_update:
@@ -262,8 +263,6 @@ class TwistedEventLoop(EventLoop):
                         )
             if self.stop_requested:
                 self.reactor.stop()
-
-    _ticker = trellis.observer(_ticker)
 
     def _loop(self):
         """Loop updating the time and invoking requested calls"""
@@ -285,6 +284,7 @@ class TwistedEventLoop(EventLoop):
 
 
 
+
 class WXEventLoop(EventLoop):
     """wxPython version of the event loop
 
@@ -296,7 +296,7 @@ class WXEventLoop(EventLoop):
     context.replaces(EventLoop)    
     wx = None
 
-    decorators.decorate(trellis.observer)
+    trellis.perform()
     def _ticker(self):
         if self.running:
             if Time.auto_update:
@@ -330,17 +330,11 @@ class Time(trellis.Component, context.Service):
     """Manage current time and intervals"""
 
     _now = EPOCH._when
-    trellis.values(
-        _tick = EPOCH._when,
-        auto_update = True,
-        _schedule = None,
-    )
-    trellis.rules(
-        _schedule = lambda self: [Max],
-        _events = lambda self: weakref.WeakValueDictionary(),
-    )
+    auto_update = trellis.variable(True)
+    _schedule = trellis.compute(lambda self: [Max], writable=True)
+    _events = trellis.compute(lambda self: weakref.WeakValueDictionary())
 
-    decorators.decorate(trellis.rule)
+    trellis.maintain()
     def _updated(self):
         schedule = self._schedule
         while self._tick >= schedule[0]:
@@ -371,6 +365,8 @@ class Time(trellis.Component, context.Service):
         """Return a timer that's the given offset from the current time"""
         return _Timer(self._now + interval)
 
+
+
     def advance(self, interval):
         """Advance the current time by the given interval"""
         self._set(self._now + interval)
@@ -384,13 +380,13 @@ class Time(trellis.Component, context.Service):
         self._tick = when
     _set = trellis.modifier(_set)
 
+    trellis.maintain(initially=EPOCH._when)
     def _tick(self):
         if self.auto_update:
             tick = self._now = self.time()            
             trellis.poll()
             return tick
         return self._tick
-    _tick = trellis.rule(_tick)
 
     def next_event_time(self, relative=False):
         """The time of the next event to occur, or ``None`` if none scheduled
@@ -407,6 +403,10 @@ class Time(trellis.Component, context.Service):
         return when
 
     def time(self): return time.time()
+
+
+
+
 
 class TaskCell(trellis.AbstractCell, stm.AbstractListener):
     """Cell that manages a generator-based task"""
@@ -431,9 +431,9 @@ class TaskCell(trellis.AbstractCell, stm.AbstractListener):
             trellis.on_commit(trellis.change_attr, self, '_scheduled', False)
         return False
 
-
-
-
+    decorators.decorate(classmethod)
+    def factory(cls, rule, value, discrete):
+        return cls(rule)
 
 
 
@@ -545,12 +545,12 @@ def resume():
         finally:
             del e
 
-def task_factory(typ, ob, name):
-    return trellis.default_factory(typ, ob, name, TaskCell)
+def task(rule=None, optional=False):
+    """Define a task cell attribute"""
+    return trellis._build_descriptor(
+        rule=rule, factory=TaskCell.factory, optional=optional
+    )
 
-def task(func):
-    """Define a rule cell attribute"""
-    return trellis._rule(func, '@task', task_factory, __frame=sys._getframe(1))
 
 
 

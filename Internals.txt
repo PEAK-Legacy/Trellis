@@ -1,3 +1,10 @@
+Turn off deprecation warnings for this test... for now::
+
+>>> from warnings import filterwarnings
+>>> filterwarnings('ignore', '', DeprecationWarning, __name__)
+>>> __name__ = __name__
+
+
 Cell Properties
 ---------------
 
@@ -100,10 +107,10 @@ TodoProperty
 TodoProperty objects are like CellProperty, but offer an extra ``future``
 attribute::
 
-    >>> from peak.events.trellis import TodoProperty, todo_factory
+    >>> from peak.events.trellis import TodoProperty
 
     >>> class X(object):
-    ...     x = TodoProperty('x')
+    ...     x = TodoProperty(__name__='x')
     ...     future_x = x.future
     >>> help(X)
     Help on class X in module __builtin__:
@@ -115,21 +122,6 @@ attribute::
      |  x...
      |      Property representing a ``todo`` attribute
     <BLANKLINE>
-
-
-    >>> TodoProperty('x')==TodoProperty('y')
-    False
-    >>> TodoProperty('x')==CellProperty('x')
-    False
-    >>> TodoProperty('x')!=TodoProperty('x')
-    False
-
-    >>> TodoProperty('x')==TodoProperty('x')
-    True
-    >>> TodoProperty('x')!=TodoProperty('y')
-    True
-    >>> TodoProperty('x')!=CellProperty('x')
-    True
 
 
 Class Metadata
@@ -206,7 +198,7 @@ And uses the event flag from IsDiscrete::
     >>> default_factory(Test, Test(), 'x')
     Value(None, discrete[None])
 
-The todo_factory only uses the rule to create the default value, and always
+``TodoProperty`` only uses the rule to create the default value, and always
 creates a rule-free receiver, regardless of the value or receiver flag
 settings::
 
@@ -214,13 +206,13 @@ settings::
     >>> CellValues(Test)['x'] = 54
     >>> IsDiscrete(Test)['x'] = False
 
-    >>> Test.x = TodoProperty('x')
+    >>> Test.x = TodoProperty(__name__='x', rule=lambda self: dict(), value=54)
     >>> Test.to_x = Test.x.future
 
-    >>> todo_factory(Test, Test(), 'x')
+    >>> Test.x.make_cell(Test, Test(), 'x')
     TodoValue(<bound method Test.<lambda> of <Test ...>>, {}, discrete[{}])
 
-    >>> CellFactories(Test)['x'] = todo_factory
+    >>> CellFactories(Test)['x'] = Test.x.make_cell
 
 future, @modifier, etc.
 -----------------------
@@ -269,12 +261,9 @@ task_factory
 
 The task_factory creates a TaskCell::
 
-    >>> from peak.events.activity import task_factory
+    >>> from peak.events.activity import task
     >>> def f(self): yield 1; print "done"
-    >>> CellRules(Test)['x'] = f
-    >>> CellValues(Test)['x'] = NO_VALUE
-    >>> IsDiscrete(Test)['x'] = False
-    >>> t = task_factory(Test, Test(), 'x')
+    >>> t = task(f).make_cell(Test, Test(), 'x')
     >>> t
     TaskCell(None)
     >>> print t.value
@@ -289,12 +278,12 @@ Decorators
 
     >>> from peak.util.decorators import decorate
 
-    >>> class Test:
+    >>> class Test(trellis.Component):
     ...     def aRule(self):
     ...         return 42
     ...     r = rule(aRule)   # trick to exercise auto-name-finding
     ...     anEvent = receiver(-1)
-    ...     optRule = optional(lambda:99)
+    ...     optRule = compute(lambda:99)
     ...     todo = todo(lambda self:{})
 
     >>> Test.r
@@ -304,26 +293,23 @@ Decorators
     TodoProperty('todo')
 
     >>> CellRules(Test)
-    {'anEvent': None,
-     'optRule': <function <lambda> at...>,
-     'aRule': <function aRule at...>, 'todo': <function <lambda> at ...>}
+    {'anEvent': None, 'aRule': <function aRule at...>}
 
     >>> CellValues(Test)
-    {'anEvent': -1, 'todo': None}
+    {'anEvent': -1}
 
     >>> IsDiscrete(Test)
-    {'anEvent': True, 'optRule': False, 'aRule': False, 'todo': True}
+    {'anEvent': True, 'aRule': False}
 
     >>> CellFactories(Test)
     {'anEvent': <function default_factory...>,
-     'aRule': <function default_factory...>,
-     'todo': <function todo_factory...>}
+     'aRule': <function default_factory...>}
 
     >>> IsOptional(Test)
-    {'anEvent': False, 'optRule': True, 'aRule': True, 'todo': False}
+    {'anEvent': False, 'optRule': True, 'aRule': False, 'todo': False}
 
 
-    >>> class Test(object):
+    >>> class Test(trellis.Component):
     ...     todos(
     ...         added   = lambda self:{},
     ...         removed = lambda self:set()
@@ -334,44 +320,29 @@ Decorators
     ...     def task(self): yield None
 
     >>> CellRules(Test)
-    {'added': <function ... at ...>,
-     'removed': <function ... at...>,
-     'task': <function task at ...>}
+    {}
 
     >>> CellValues(Test)
-    {'removed': None, 'added': None}
+    {}
 
     >>> IsDiscrete(Test)
-    {'added': True, 'removed': True, 'task': False}
+    {}
 
     >>> CellFactories(Test)
-    {'added': <function todo_factory...>,
-     'removed': <function todo_factory...>,
-     'task': <function task_factory...>}
+    {'removed': <bound method TodoProperty.make_cell of TodoProperty('removed')>,
+     'task': <bound method CellAttribute.make_cell of CellAttribute('task')>,
+     'added': <bound method TodoProperty.make_cell of TodoProperty('added')>}
 
 
 Error messages::
 
     >>> class Test:
-    ...     decorate(rule, optional)
+    ...     decorate(rule, trellis.optional)
     ...     def wrong(): pass
     Traceback (most recent call last):
       ...
     TypeError: @rule decorator must wrap a function directly
 
-    >>> class Test:
-    ...     decorate(activity.task, trellis.optional)
-    ...     def wrong(): pass
-    Traceback (most recent call last):
-      ...
-    TypeError: @task decorator must wrap a function directly
-
-    >>> class Test:
-    ...     decorate(todo, optional)
-    ...     def wrong(): pass
-    Traceback (most recent call last):
-      ...
-    TypeError: @todo decorator must wrap a function directly
 
 
 Components
@@ -391,13 +362,13 @@ Components
     ...     always = rule(always)
     ...     def only_on_request(self):
     ...         print "hello!"
-    ...     only_on_request = optional(only_on_request)
-    ...     A=optional(lambda s:hello("A!"))
+    ...     only_on_request = compute(only_on_request)
+    ...     A=compute(lambda s:hello("A!"))
     ...     rules(B=lambda s:hello("B!"))
 
 
     >>> IsDiscrete(Test)
-    {'A': False, 'B': False, 'always': False, 'only_on_request': False,
+    {'B': False, 'always': False, 
      'Y': True, 'X': False, 'Z': False}
 
 
@@ -975,7 +946,7 @@ Observers::
     >>> trellis.ObserverCell(fail)
     Traceback (most recent call last):
       ...
-    RuntimeError: Can't change objects during commit phase
+    RuntimeError: Can't change objects during @perform or @compute
 
 
 Pentagram of Death
@@ -1250,7 +1221,7 @@ Sensors and Connectors
     ...     def connect(self, sensor):
     ...         print "connecting", sensor
     ...         return sensor
-    ...     def disconnect(self, key):
+    ...     def disconnect(self, sensor, key):
     ...         print "disconnecting", key
 
     >>> c = trellis.Cell(MyConnector())
@@ -1275,7 +1246,7 @@ Sensors and Connectors
     >>> del c2
     disconnecting Sensor(<bound method MyConnector.read of...>, 42)
 
-    >>> c.conn_manager.listening
+    >>> c.listening
     NOT_GIVEN
 
 
@@ -1345,4 +1316,52 @@ Effectors
     >>> del c2
     disconnecting Sensor(<bound method GlobalConnector.read of...>, 77)
 
+
+Lazy cells
+----------
+
+    >>> c1=trellis.Value(66)
+
+    >>> def cantwrite():
+    ...     c1.value = 23
+
+    >>> c2=trellis.LazyCell(cantwrite)
+    >>> c2.value
+    Traceback (most recent call last):
+      ...
+    RuntimeError: Can't change objects during @perform or @compute
+
+    >>> def calc():
+    ...     return c1.value
+
+    >>> c2=trellis.LazyCell(calc)
+    >>> c2.value
+    66
+
+    >>> list(c2.iter_listeners())
+    []
+    >>> list(c2.iter_subjects())
+    []
+
+    >>> c3 = trellis.Cell(c2.get_value)
+    >>> c3.value
+    66
+
+    >>> list(c2.iter_listeners())
+    [ReadOnlyCell(<...get_value of LazyCell(<function calc...>, 66)>, 66)]
+
+    >>> list(c2.iter_subjects())
+    [Value(66)]
+
+    >>> del c3
+    >>> list(c2.iter_listeners())
+    []
+    >>> list(c2.iter_subjects())
+    []
+
+    >>> c2=trellis.LazyCell(lambda: {})
+    >>> c2.value
+    {}
+    >>> c2
+    Constant({})
 

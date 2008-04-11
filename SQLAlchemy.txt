@@ -23,7 +23,7 @@ Using the Trellis with SQLAlchemy
     >>> metadata.create_all(engine)
 
     >>> class User(trellis.Component):
-    ...     trellis.values(password=None)
+    ...     password = trellis.variable(None)
     ...     def __init__(self, name, fullname, password):
     ...         self.name = name
     ...         self.fullname = fullname

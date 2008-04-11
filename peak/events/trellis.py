@@ -10,28 +10,28 @@ __all__ = [
     'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
     'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin', 'Sensor',
-    'AbstractConnector', 'Connector',  'Effector',
-    # XXX 'ConnectionManager' ?
+    'AbstractConnector', 'Connector',  'Effector', 'init_attrs',
+    'variable', 'compute', 'maintain', 'perform'
 ]
 
 NO_VALUE = Symbol('NO_VALUE', __name__)
 _sentinel = NO_VALUE
 
+
 class InputConflict(Exception):
     """Attempt to set a cell to two different values during the same pulse"""
 
 
-
-
-
-
-
-
-
-
-
-
-
+def init_attrs(self, **kw):
+    """Initialize attributes from keyword arguments"""
+    if kw:
+        cls = type(self)
+        for k, v in kw.iteritems():
+            if not hasattr(cls, k):
+                raise TypeError("%s() has no keyword argument %r"
+                    % (cls.__name__, k)
+                )
+            setattr(self, k, v)
 
 
 
@@ -210,7 +210,10 @@ class ReadOnlyCell(_ReadValue, stm.AbstractListener):
             change_attr(self, '_set_by', _sentinel)
             change_attr(self, 'rule', None)
             change_attr(self, 'next_listener', None)
-            change_attr(self, '__class__', ConstantRule)
+            change_attr(self, '__class__', self._const_class())
+
+    def _const_class(self):
+        return ConstantRule
 
 
 class ConstantMixin(AbstractCell):
@@ -241,9 +244,6 @@ class Constant(ConstantMixin):
 
 
 
-
-
-
 class ConstantRule(ConstantMixin, ReadOnlyCell):
     """A read-only cell that no longer depends on anything else"""
 
@@ -259,6 +259,7 @@ class ConstantRule(ConstantMixin, ReadOnlyCell):
         """Constants don't run"""
 
 
+
 class ObserverCell(stm.AbstractListener, AbstractCell):
     """Rule that performs non-undoable actions"""
 
@@ -272,7 +273,6 @@ class ObserverCell(stm.AbstractListener, AbstractCell):
         atomically(schedule, self)
 
 ObserverCell.rule = ObserverCell.run    # alias the attribute for inspection
-
 
 
 
@@ -323,7 +323,7 @@ def modifier(func):
 
 
 
-        
+
 
 
 set_next_listener = ReadOnlyCell.next_listener.__set__
@@ -336,18 +336,19 @@ class SensorBase(ReadOnlyCell):
 
     def __init__(self, rule, value=None, discrete=False):
         if isinstance(rule, AbstractConnector):
-            self.conn_manager = rule.conn_manager_for(self)
+            self.connector = rule
             rule = rule.read
         else:
-            self.conn_manager = None
+            self.connector = None
+        self.listening = NOT_GIVEN
         set_next_listener(self, None)
         super(SensorBase, self).__init__(rule, value, discrete)
 
     def _set_listener(self, listener):
         was_seen = get_next_listener(self) is not None
         set_next_listener(self, listener)
-        if was_seen != (listener is not None) and self.conn_manager is not None:
-            atomically(schedule, self.conn_manager)
+        if was_seen != (listener is not None) and self.connector is not None:
+            atomically(schedule, self.update_connection)
 
     next_listener = property(get_next_listener, _set_listener)
 
@@ -366,10 +367,24 @@ class SensorBase(ReadOnlyCell):
     def _check_const(self): pass    # we can never become Constant
 
 
+    def update_connection():
+        self = ctrl.current_listener.im_self
+        descr = type(self).listening
+        listening = descr.__get__(self)
+        if self.next_listener is not None:
+            if listening is NOT_GIVEN:
+                descr.__set__(self, self.connector.connect(self))
+        elif listening is not NOT_GIVEN:
+            self.connector.disconnect(self, listening)
+            descr.__set__(self, NOT_GIVEN)
+
+    update_connection.run = update_connection
+    update_connection.next_subject = update_connection.next_listener = None
+    update_connection.layer = Max
 
 class Sensor(SensorBase):
     """A cell that can receive value callbacks from the outside world"""
-    __slots__ = 'conn_manager'
+    __slots__ = 'connector', 'listening'
 
 
 class AbstractConnector(object):
@@ -382,9 +397,6 @@ class AbstractConnector(object):
         # Just use the current/last received value by default
         return ctrl.current_listener._value
 
-    def conn_manager_for(self, sensor):
-        return ConnectionManager(sensor, self)
-
     def connect(self, sensor):
         """Connect the sensor to the outside world, returning disconnect key
 
@@ -392,7 +404,7 @@ class AbstractConnector(object):
         return an object suitable for use by ``disconnect()``.
         """
 
-    def disconnect(self, key):
+    def disconnect(self, sensor, key):
         """Disconnect the key returned by ``connect()``"""
 
 
@@ -408,46 +420,75 @@ class Connector(AbstractConnector):
         self.connect = connect
         self.disconnect = disconnect
 
-class ConnectionManager(stm.AbstractListener, AbstractCell):
-    """Cell that manages a sensor's input callback connection"""
 
-    __slots__ = 'sensor', 'connector', 'listening'
-    next_subject = None
-    layer = Max
 
-    def __init__(self, sensor, connector):
-        self.sensor = sensor
-        self.connector = connector
-        self.listening = NOT_GIVEN
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class LazyConnector(AbstractConnector):
+    """Dummy connector object used for lazy cells"""
+
+    decorators.decorate(staticmethod)
+    def connect(sensor):
+        pass
+
+    decorators.decorate(staticmethod)
+    def disconnect(sensor, key):
+        link = sensor.next_subject
+        if link is not None: change_attr(sensor, '_needs_init', True)
+        while link is not None:
+            nxt = link.next_subject   # avoid unlinks breaking iteration
+            on_undo(stm.Link, link.subject, sensor)
+            link.unlink()
+            link = nxt
+    
+class LazyCell(Sensor):
+    """A ReadOnlyCell that is only recalculated when it has listeners"""
+
+    def __init__(self, rule, value=None, discrete=False):
+        super(LazyCell, self).__init__(rule, value, discrete)
+        #if self.connector is not None: raise XXX
+        self.connector = LazyConnector
+
+    _check_const = ReadOnlyCell._check_const
 
     def run(self):
-        sensor = self.sensor
-        listening = self.listening
-        if sensor.next_listener is not None:
-            if listening is NOT_GIVEN:
-                self.listening = self.connector.connect(sensor)
-        elif listening is not NOT_GIVEN:
-            self.connector.disconnect(listening)
-            self.listening = NOT_GIVEN
+        run = super(LazyCell, self).run
+        if not ctrl.readonly:
+            ctrl.with_readonly(run)
+        else: run()
+        if self.listening is NOT_GIVEN:  # may need to disconnect...
+            self.listening = None; schedule(self.update_connection)
+    def _const_class(self):
+        return LazyConstant
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+class LazyConstant(ConstantRule, LazyCell):
+    """LazyCell version of a constant"""
+    __slots__ = ()
 
 class Cell(ReadOnlyCell, Value):
     """Spreadsheet-like cell with automatic updating"""
@@ -517,7 +558,7 @@ class Cell(ReadOnlyCell, Value):
 class Effector(SensorBase, Cell):
     """Writable Sensor"""
 
-    __slots__ = 'conn_manager'
+    __slots__ = 'connector', 'listening'
 
 
 
@@ -545,16 +586,8 @@ class CellFactories(_Defaulting):     """Registry for cell factories"""
 class CellValues(addons.Registry):    """Registry for cell values"""
 class CellRules(addons.Registry):     """Registry for cell rules"""
 class IsDiscrete(_Defaulting): "Registry for flagging that a cell is an event"
-
 class IsOptional(_Defaulting):
     """Registry for flagging that an attribute need not be activated"""
-    def created_for(self, cls):
-        _Defaulting.created_for(self, cls)
-        for k in self:
-            if k in cls.__dict__ \
-            and not isinstance(cls.__dict__[k], CellProperty):
-                # Don't create a cell for overridden non-CellProperty attribute 
-                self[k] = True
 
 def default_factory(typ, ob, name, celltype=Cell):
     """Default factory for making cells"""
@@ -568,10 +601,6 @@ def default_factory(typ, ob, name, celltype=Cell):
         return celltype(rule)
     return celltype(rule, value, IsDiscrete(typ).get(name, False))
 
-
-
-
-
 class Cells(addons.AddOn):
     __slots__ = ()
     addon_key = classmethod(lambda cls: '__cells__')
@@ -579,7 +608,10 @@ class Cells(addons.AddOn):
 
 def rule(func):
     """Define a rule cell attribute"""
+    warndep("use 'compute' or 'maintain' in place of 'rule'")
     return _rule(func, __frame=sys._getframe(1))
+
+
 
 def _rule(func, deco='@rule', factory=default_factory, extras=(), **kw):
     if isinstance(func, CellProperty):
@@ -590,6 +622,7 @@ def _rule(func, deco='@rule', factory=default_factory, extras=(), **kw):
 
 def value(value):
     """Define a value cell attribute"""
+    warndep("use 'variable' in place of 'value'")
     return _value(value, __frame=sys._getframe(1))
 
 def _value(value, **kw):
@@ -603,55 +636,63 @@ def _set_multi(frame, kw, wrap, arg='func'):
 
 def rules(**attrs):
     """Define multiple rule-cell attributes"""
+    warndep("use 'compute.attributes' in place of 'rules'")
     _set_multi(sys._getframe(1), attrs, _rule)
 
 def values(**attrs):
     """Define multiple value-cell attributes"""
+    warndep("use 'variable.attributes' in place of 'values'")
     _set_multi(sys._getframe(1), attrs, _value, 'value')
 
 def receivers(**attrs):
     """Define multiple receiver-cell attributes"""
+    warndep("use 'variable.attributes.resetting_to' in place of 'receivers'")
     _set_multi(sys._getframe(1), attrs, _discrete, 'value')
-
-def todos(**attrs):
-    """Define multiple todo-cell attributes"""
-    _set_multi(sys._getframe(1), attrs, _todo)
 
 def optional(func):
     """Define a rule-cell attribute that's not automatically activated"""
+    warndep("use 'compute' or the 'optional' keyword to maintain/perform")
     return _invoke_callback([(IsOptional, True)], func)
 
 def receiver(value):
     """Define a receiver-cell attribute"""
+    warndep("replace 'receiver(X)' with 'variable(resetting_to=X)'")
     return _discrete(None, value, __frame=sys._getframe(1))
 
 def _discrete(func=_sentinel, value=_sentinel, **kw):
     items = [(IsDiscrete, True), (CellFactories, default_factory)]
     return _invoke_callback(items, func, value, **kw)
 
-def todo(func):
-    """Define an attribute that can send "messages to the future" """
-    return _todo(func, __frame=sys._getframe(1))
-
-def _todo(func, **kw):
-    if isinstance(func, CellProperty):
-        raise TypeError("@todo decorator must wrap a function directly")
-    else:
-        items = [
-            (CellRules, func), (CellFactories, todo_factory),
-            (CellValues, None), (IsDiscrete, True),
-        ]
-        return _invoke_callback(items, func, __proptype=TodoProperty, **kw)
-
 def discrete(func):
     """Define a discrete rule attribute"""
+    warndep("replace discrete with (compute/maintain)(resetting_to=)")
     return _discrete(func, __frame=sys._getframe(1))
 
 def observer(func):
     """Define an observer cell attribute"""
+    warndep("replace trellis.observer with trellis.perform")
     return _rule(func, '@observer', observer_factory, [(CellValues, NO_VALUE)],
         __frame=sys._getframe(1)
     )
+
+def warndep(msg):
+    from warnings import warn
+    level = 2
+    while sys._getframe(level).f_globals.get('__name__')=='peak.util.decorators':
+        level += 1
+    warn("Please "+msg, DeprecationWarning, level+1)
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class Component(decorators.classy):
@@ -661,38 +702,38 @@ class Component(decorators.classy):
 
     decorators.decorate(classmethod, modifier)
     def __class_call__(cls, *args, **kw):
+        optional = IsOptional(cls)  # ensure initialization beforehand
         rv = super(Component, cls).__class_call__(*args, **kw)
         if isinstance(rv, cls):
             cells = Cells(rv)
-            for k, v in IsOptional(cls).iteritems():
+            for k, v in optional.iteritems():
                 if not v and k not in cells:
                     c = cells.setdefault(k, CellFactories(cls)[k](cls, rv, k))
                     c.value     # XXX
         return rv
 
-    def __init__(self, **kw):
-        if kw:
-            cls = type(self)
-            for k, v in kw.iteritems():
-                if not hasattr(cls, k):
-                    raise TypeError("%s() has no keyword argument %r"
-                        % (cls.__name__, k)
-                    )
-                setattr(self, k, v)
-
+    __init__ = init_attrs
+    
     decorators.decorate(staticmethod)
     def __sa_instrumentation_manager__(cls):
         from peak.events.sa_support import SAInstrument
         return SAInstrument(cls)
 
-
-
-
-
-
-
-
-
+    def __class_init__(cls, name, bases, cdict, supr):        
+        supr()(cls, name, bases, cdict, supr)
+        try: Component
+        except NameError: return
+        optional = IsOptional(cls)
+        factories = CellFactories(cls)
+        for k,descr in cdict.items():
+            if isinstance(descr, CellAttribute):
+                if descr.__name__ is None: descr.__name__ = k
+                optional[k] = descr.optional
+                factories[k] = descr.make_cell
+            elif k in optional and not isinstance(descr, CellProperty):
+                # Don't create a cell for overridden non-CellProperty attribute 
+                optional[k] = True
+            
 
 
 def repeat():
@@ -738,8 +779,9 @@ def observer_factory(typ, ob, name):
 
 class CellProperty(object):
     """Descriptor for cell-based attributes"""
-    def __init__(self, name):
-        self.__name__ = name
+    __slots__ = '__name__'
+
+    def __init__(self, name): self.__name__ = name
 
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self.__name__)
@@ -753,8 +795,7 @@ class CellProperty(object):
             cell = cells[self.__name__]
         except KeyError:
             name = self.__name__
-            cell = CellFactories(typ)[name](typ, ob, name)
-            cell = cells.setdefault(name, cell)
+            cell = cells.setdefault(name, self.make_cell(typ, ob, name))
         return cell.value
 
     def __set__(self, ob, value):
@@ -771,7 +812,7 @@ class CellProperty(object):
             except KeyError:
                 name = self.__name__
                 typ = type(ob)
-                cell =  CellFactories(typ)[name](typ, ob, name)
+                cell = self.make_cell(typ, ob, name)
                 if not hasattr(cell, 'set_value'):
                     return cells.setdefault(name, Constant(value))
                 cell = cells.setdefault(name, cell)
@@ -782,6 +823,41 @@ class CellProperty(object):
 
     def __ne__(self, other):
         return type(other) is not type(self) or other.__name__!=self.__name__
+
+    def make_cell(self, typ, ob, name):
+        return CellFactories(typ)[name](typ, ob, name)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def _invoke_callback(
     extras, func=_sentinel, value=_sentinel, __frame=None, __name=None,
@@ -818,7 +894,186 @@ def _invoke_callback(
         return _sentinel
 
 
-class TodoProperty(CellProperty):
+
+
+
+
+
+
+class CellAttribute(object):
+    """Self-contained cell descriptor"""
+
+    value = NO_VALUE
+    rule = None
+    factory = Cell
+    discrete = False
+    optional = False
+    __name__ = None
+
+    __init__ = init_attrs
+
+    def make_cell(self, typ, ob, name):
+        rule = self.rule
+        value = self.value
+        if hasattr(rule, '__get__'):
+            rule = rule.__get__(ob, typ)
+        if value is NO_VALUE and rule is not None:
+            value = None
+        return self.factory(rule, value, self.discrete)
+        
+    def __get__(self, ob, typ=None):
+        if ob is None:
+            return self
+        try:
+            cells = ob.__cells__
+        except AttributeError:
+            cells = Cells(ob)
+        try:
+            cell = cells[self.__name__]
+        except KeyError:
+            name = self.__name__
+            cell = cells.setdefault(name, self.make_cell(typ, ob, name))
+        return cell.value
+
+    def __repr__(self):
+        return "%s(%r)" % (self.__class__.__name__, self.__name__)
+
+
+
+
+    def __set__(self, ob, value):
+        try:
+            cells = ob.__cells__
+        except AttributeError:
+            cells = Cells(ob)
+
+        if isinstance(value, AbstractCell):
+            name = self.__name__
+            if name in cells and isinstance(cells[name], ConstantMixin):
+                raise AttributeError("Can't change a constant")
+            cells[name] = value
+        else:
+            try:
+                cell = cells[self.__name__]
+            except KeyError:
+                name = self.__name__
+                typ = type(ob)
+                cell = self.make_cell(typ, ob, name)
+                if not hasattr(cell, 'set_value'):
+                    return cells.setdefault(name, Constant(value))
+                cell = cells.setdefault(name, cell)
+            cell.value = value
+
+    decorators.decorate(classmethod)
+    def mkattr(cls, initially=NO_VALUE, resetting_to=NO_VALUE, **kw):
+        if initially is not NO_VALUE and resetting_to is not NO_VALUE:
+            raise TypeError("Can't specify both 'initially' and 'resetting_to'")
+    
+        value = initially
+        discrete = False
+    
+        if resetting_to is not NO_VALUE:
+            value = resetting_to
+            discrete = True
+    
+        return cls(value=value, discrete=discrete, **kw)
+
+
+
+
+
+def variable(initially=NO_VALUE, resetting_to=NO_VALUE):
+    return CellAttribute.mkattr(initially, resetting_to)
+
+def compute(rule=None, initially=NO_VALUE, resetting_to=NO_VALUE, writable=False):
+    return _build_descriptor(
+        rule=rule, initially=initially, resetting_to=resetting_to,
+        factory=[LazyCell,Cell][bool(writable)], optional=True
+    )
+
+def maintain(rule=None, initially=NO_VALUE, resetting_to=NO_VALUE, optional=False):
+    return _build_descriptor(
+        rule=rule, initially=initially, resetting_to=resetting_to,
+        optional=optional
+    )
+
+def perform(rule=None, optional=False):
+    return _build_descriptor(
+        rule=rule, factory=lambda r,v,d: ObserverCell(r), optional=optional
+    )
+
+def compute_attributes(**attrs):
+    """Define multiple rule-cell attributes"""
+    _make_multi(sys._getframe(1), attrs, factory=ReadOnlyCell, optional=True)
+compute.attributes = compute_attributes
+
+def maintain_attributes(**attrs):
+    """Define multiple rule-cell attributes"""
+    _make_multi(sys._getframe(1), attrs)
+maintain.attributes = maintain_attributes
+
+def variable_attributes(**attrs):
+    """Define multiple value-cell attributes"""
+    _make_multi(sys._getframe(1), attrs, arg='initially')
+variable.attributes = variable_attributes
+
+def variable_attributes_resetting_to(**attrs):
+    """Define multiple receiver-cell attributes"""
+    _make_multi(sys._getframe(1), attrs, arg='resetting_to')
+variable.attributes.resetting_to = variable_attributes_resetting_to
+
+
+def _make_multi(frame, kw, wrap=CellAttribute.mkattr, arg='rule', **opts):
+    for k, v in kw.items():
+        if k in frame.f_locals:
+            raise TypeError("%s is already defined in this class" % (k,))
+        opts[arg] = v
+        frame.f_locals[k]= wrap(__name__=k, **opts)
+
+
+def _build_descriptor(
+    rule=None, __frame=None, __name=None, __proptype = CellAttribute.mkattr, **kw
+):
+    frame = __frame or sys._getframe(2)
+    name  = __name
+
+    if rule is not None:
+        if rule is not None and getattr(rule,'__name__','<lambda>')!='<lambda>':
+            name = name or rule.__name__
+
+    def callback(frame, name, rule, locals):
+        if getattr(rule,'__name__',None) == '<lambda>':
+            try:
+                rule.__name__ = name
+            except TypeError:
+                pass  # Python 2.3 doesn't let you set __name__
+        return __proptype(__name__=name, rule=rule, **kw)
+        
+    if name:
+        # Have everything we need, just go for it
+        return callback(frame, name, rule, None)
+    elif rule is not None:
+        # We know everything but the name, so return the rule as-is and trap
+        # the assignment...
+        decorators.decorate_assignment(callback, frame=frame)
+        return rule
+    else:
+        # We're being used as a decorator, so just decorate.
+        return decorators.decorate_assignment(callback, frame=frame)
+
+
+
+
+def todos(**attrs):
+    """Define multiple todo-cell attributes"""
+    _make_multi(sys._getframe(1), attrs, TodoProperty.mkattr)
+
+def todo(rule=None):
+    """Define an attribute that can send "messages to the future" """
+    return _build_descriptor(rule=rule, __proptype = TodoProperty.mkattr)
+
+
+class TodoProperty(CellAttribute):
     """Property representing a ``todo`` attribute"""
 
     decorators.decorate(property)
@@ -832,21 +1087,12 @@ class TodoProperty(CellProperty):
                 cell = cells[name]
             except KeyError:
                 typ = type(ob)
-                cell = CellFactories(typ)[name](typ, ob, name)
-                cell = cells.setdefault(name, cell)
+                cell = cells.setdefault(name, self.make_cell(typ, ob, name))
             return cell.get_future()
         return property(get, doc="The future value of the %r attribute" % name)
 
-
-def todo_factory(typ, ob, name):
-    """Factory for ``todo`` cells"""
-    rule = CellRules(typ).get(name).__get__(ob, typ)
-    return TodoValue(rule)
-
-
-
-
-
+    def factory(self, rule, value, discrete):
+        return TodoValue(rule)
 
 
 
@@ -941,7 +1187,7 @@ class Dict(UserDict.IterableUserDict, Component):
         raise TypeError
 
 
-    decorators.decorate(rule)    
+    maintain()    
     def data(self):
         data = self.data
         if data is None:
@@ -1044,7 +1290,7 @@ class List(UserList.UserList, Component):
         Component.__init__(self, **kw)
         self.data[:] = other
 
-    decorators.decorate(rule)
+    maintain()
     def data(self):
         if self.changed:
             mark_dirty()
@@ -1166,7 +1412,7 @@ class Set(sets.Set, Component):
             # we can update self._data in place, since no-one has seen it yet
             sets.Set._update(self, iterable)
 
-    decorators.decorate(rule)
+    maintain()
     def _data(self):
         """The dictionary containing the set data."""
         data = self._data

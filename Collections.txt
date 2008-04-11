@@ -36,9 +36,9 @@ A ``collections.SortedSet`` is a specialized component that lets you wrap a
     >>> myIndex = collections.SortedSet(data=myItems)
 
     >>> class Viewer(trellis.Component):
-    ...     trellis.values(model = None)
+    ...     model = trellis.variable(None)
     ...
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def view_it(self):
     ...         if self.model is not None:
     ...             print self.model
@@ -68,7 +68,7 @@ becomes empty again::
     >>> view.model = None   # quiet, please
 
     >>> class Watcher(trellis.Component):
-    ...     @trellis.observer
+    ...     @trellis.perform
     ...     def dump(self):
     ...         print myIndex.changes
 
