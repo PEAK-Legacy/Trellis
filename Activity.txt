@@ -155,7 +155,7 @@ boolean (truth) value::
 And of course, you can use this boolean test in a rule, to trigger some action::
 
     >>> class AlarmClock(trellis.Component):
-    ...     timeout = trellis.variable(None)
+    ...     timeout = trellis.attr(None)
     ...     trellis.maintain()
     ...     def alert(self):
     ...         if self.timeout:
@@ -181,7 +181,7 @@ create an "elapsed" timer, and trigger when a certain amount of time has
 passed::
 
     >>> class Elapsed(trellis.Component):
-    ...     duration = trellis.variable(20)
+    ...     duration = trellis.attr(20)
     ...     has_run_for = trellis.maintain(lambda self: Time[0])
     ...     trellis.maintain()
     ...     def alarm(self):
@@ -212,11 +212,11 @@ amount of time that some condition has been true (or false).  For example, how
 long a process has been idle (or busy)::
 
     >>> class IdleTimer(trellis.Component):
-    ...     trellis.variable.attributes(
+    ...     trellis.attrs(
     ...         idle_timeout = 20,
     ...         busy = False,
     ...     )
-    ...     idle_for = trellis.compute(
+    ...     idle_for = trellis.maintain(
     ...         lambda self: self.idle_for.begins_with(not self.busy),
     ...         initially = activity.NOT_YET
     ...     )
@@ -519,7 +519,7 @@ you can get it to run across multiple trellis recalculations, retaining its
 state along the way.  For example::
 
     >>> class TaskExample(trellis.Component):
-    ...     trellis.variable.attributes(
+    ...     trellis.attrs(
     ...         start = False,
     ...         stop = False
     ...     )
@@ -585,7 +585,7 @@ Tasks can invoke or "call" other generators by yielding them.  For example, we
 can rewrite our example like this, for more modularity::
 
     >>> class TaskExample(trellis.Component):
-    ...     trellis.variable.attributes(
+    ...     trellis.attrs(
     ...         start = False,
     ...         stop = False
     ...     )

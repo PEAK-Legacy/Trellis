@@ -11,7 +11,7 @@ __all__ = [
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
     'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin', 'Sensor',
     'AbstractConnector', 'Connector',  'Effector', 'init_attrs',
-    'variable', 'compute', 'maintain', 'perform'
+    'attr', 'attrs', 'compute', 'maintain', 'perform'
 ]
 
 NO_VALUE = Symbol('NO_VALUE', __name__)
@@ -111,7 +111,7 @@ class _ReadValue(stm.AbstractSubject, AbstractCell):
         """True if value was set during this recalc"""
         if ctrl.current_listener is None:
             raise RuntimeError("was_set can only be accessed by a rule")
-        used(self)  
+        used(self)
         who = self._set_by
         return who is not _sentinel and who is not self
 
@@ -231,7 +231,6 @@ class ConstantMixin(AbstractCell):
     def __repr__(self):
         return "Constant(%r)" % (self.value,)
 
-
 class Constant(ConstantMixin):
     """A pure read-only value"""
 
@@ -240,8 +239,9 @@ class Constant(ConstantMixin):
     def __init__(self, value):
         Constant.value.__set__(self, value)
 
-
-
+    decorators.decorate(classmethod)
+    def from_attr(cls, rule, value, discrete):
+        return cls(value)
 
 
 class ConstantRule(ConstantMixin, ReadOnlyCell):
@@ -272,11 +272,11 @@ class ObserverCell(stm.AbstractListener, AbstractCell):
         super(ObserverCell, self).__init__()
         atomically(schedule, self)
 
+    decorators.decorate(classmethod)
+    def from_attr(cls, rule, value, discrete):
+        return cls(rule)
+
 ObserverCell.rule = ObserverCell.run    # alias the attribute for inspection
-
-
-
-
 
 
 
@@ -357,7 +357,7 @@ class SensorBase(ReadOnlyCell):
     decorators.decorate(modifier)
     def receive(self, value):
         if not ctrl.active:
-            return atomically(self.receive, value)            
+            return atomically(self.receive, value)
         lock(self)
         if self._set_by is not _sentinel:
             raise RuntimeError("Cell already set or calculated")
@@ -421,34 +421,6 @@ class Connector(AbstractConnector):
         self.disconnect = disconnect
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class LazyConnector(AbstractConnector):
     """Dummy connector object used for lazy cells"""
 
@@ -465,9 +437,22 @@ class LazyConnector(AbstractConnector):
             on_undo(stm.Link, link.subject, sensor)
             link.unlink()
             link = nxt
-    
+
+
+
+
+
+
+
+
+
+
+
+
 class LazyCell(Sensor):
     """A ReadOnlyCell that is only recalculated when it has listeners"""
+
+    __slots__ = ()
 
     def __init__(self, rule, value=None, discrete=False):
         super(LazyCell, self).__init__(rule, value, discrete)
@@ -483,12 +468,27 @@ class LazyCell(Sensor):
         else: run()
         if self.listening is NOT_GIVEN:  # may need to disconnect...
             self.listening = None; schedule(self.update_connection)
+
     def _const_class(self):
         return LazyConstant
+
+    def get_value(self):
+        if ctrl.current_listener is self:
+            raise RuntimeError("@compute rules cannot use their own value")
+        return super(LazyCell, self).get_value()
+
+    value = property(get_value)
+
 
 class LazyConstant(ConstantRule, LazyCell):
     """LazyCell version of a constant"""
     __slots__ = ()
+
+
+
+
+
+
 
 class Cell(ReadOnlyCell, Value):
     """Spreadsheet-like cell with automatic updating"""
@@ -622,7 +622,7 @@ def _rule(func, deco='@rule', factory=default_factory, extras=(), **kw):
 
 def value(value):
     """Define a value cell attribute"""
-    warndep("use 'variable' in place of 'value'")
+    warndep("use 'attr' in place of 'value'")
     return _value(value, __frame=sys._getframe(1))
 
 def _value(value, **kw):
@@ -636,17 +636,17 @@ def _set_multi(frame, kw, wrap, arg='func'):
 
 def rules(**attrs):
     """Define multiple rule-cell attributes"""
-    warndep("use 'compute.attributes' in place of 'rules'")
+    warndep("use 'compute.attrs' in place of 'rules'")
     _set_multi(sys._getframe(1), attrs, _rule)
 
 def values(**attrs):
     """Define multiple value-cell attributes"""
-    warndep("use 'variable.attributes' in place of 'values'")
+    warndep("use 'attrs' in place of 'values'")
     _set_multi(sys._getframe(1), attrs, _value, 'value')
 
 def receivers(**attrs):
     """Define multiple receiver-cell attributes"""
-    warndep("use 'variable.attributes.resetting_to' in place of 'receivers'")
+    warndep("use 'attrs.resetting_to' in place of 'receivers'")
     _set_multi(sys._getframe(1), attrs, _discrete, 'value')
 
 def optional(func):
@@ -656,7 +656,7 @@ def optional(func):
 
 def receiver(value):
     """Define a receiver-cell attribute"""
-    warndep("replace 'receiver(X)' with 'variable(resetting_to=X)'")
+    warndep("replace 'receiver(X)' with 'attr(resetting_to=X)'")
     return _discrete(None, value, __frame=sys._getframe(1))
 
 def _discrete(func=_sentinel, value=_sentinel, **kw):
@@ -713,13 +713,13 @@ class Component(decorators.classy):
         return rv
 
     __init__ = init_attrs
-    
+
     decorators.decorate(staticmethod)
     def __sa_instrumentation_manager__(cls):
         from peak.events.sa_support import SAInstrument
         return SAInstrument(cls)
 
-    def __class_init__(cls, name, bases, cdict, supr):        
+    def __class_init__(cls, name, bases, cdict, supr):
         supr()(cls, name, bases, cdict, supr)
         try: Component
         except NameError: return
@@ -731,9 +731,9 @@ class Component(decorators.classy):
                 optional[k] = descr.optional
                 factories[k] = descr.make_cell
             elif k in optional and not isinstance(descr, CellProperty):
-                # Don't create a cell for overridden non-CellProperty attribute 
+                # Don't create a cell for overridden non-CellProperty attribute
                 optional[k] = True
-            
+
 
 
 def repeat():
@@ -905,22 +905,27 @@ class CellAttribute(object):
 
     value = NO_VALUE
     rule = None
+    make = None
     factory = Cell
     discrete = False
     optional = False
     __name__ = None
-
     __init__ = init_attrs
+
+    def initial_value(self, ob):
+        if self.value is NO_VALUE:
+            if self.make is not None:
+                return build_value(self.make, ob, self.__name__)
+            elif self.rule is not None:
+                return None
+        return self.value
 
     def make_cell(self, typ, ob, name):
         rule = self.rule
-        value = self.value
         if hasattr(rule, '__get__'):
             rule = rule.__get__(ob, typ)
-        if value is NO_VALUE and rule is not None:
-            value = None
-        return self.factory(rule, value, self.discrete)
-        
+        return self.factory(rule, self.initial_value(ob), self.discrete)
+
     def __get__(self, ob, typ=None):
         if ob is None:
             return self
@@ -935,11 +940,9 @@ class CellAttribute(object):
             cell = cells.setdefault(name, self.make_cell(typ, ob, name))
         return cell.value
 
+
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self.__name__)
-
-
-
 
     def __set__(self, ob, value):
         try:
@@ -968,21 +971,18 @@ class CellAttribute(object):
     def mkattr(cls, initially=NO_VALUE, resetting_to=NO_VALUE, **kw):
         if initially is not NO_VALUE and resetting_to is not NO_VALUE:
             raise TypeError("Can't specify both 'initially' and 'resetting_to'")
-    
         value = initially
         discrete = False
-    
         if resetting_to is not NO_VALUE:
             value = resetting_to
             discrete = True
-    
+        if value is not NO_VALUE and kw.get('make') is not None:
+            raise TypeError("Can't specify both a value and 'make'")
+
         return cls(value=value, discrete=discrete, **kw)
 
 
-
-
-
-def variable(initially=NO_VALUE, resetting_to=NO_VALUE):
+def attr(initially=NO_VALUE, resetting_to=NO_VALUE):
     return CellAttribute.mkattr(initially, resetting_to)
 
 def compute(rule=None, initially=NO_VALUE, resetting_to=NO_VALUE, writable=False):
@@ -991,36 +991,36 @@ def compute(rule=None, initially=NO_VALUE, resetting_to=NO_VALUE, writable=False
         factory=[LazyCell,Cell][bool(writable)], optional=True
     )
 
-def maintain(rule=None, initially=NO_VALUE, resetting_to=NO_VALUE, optional=False):
+def maintain(rule=None, make=None, initially=NO_VALUE, resetting_to=NO_VALUE, optional=False):
     return _build_descriptor(
-        rule=rule, initially=initially, resetting_to=resetting_to,
+        rule=rule, initially=initially, resetting_to=resetting_to, make=make,
         optional=optional
     )
 
 def perform(rule=None, optional=False):
     return _build_descriptor(
-        rule=rule, factory=lambda r,v,d: ObserverCell(r), optional=optional
+        rule=rule, factory=ObserverCell.from_attr, optional=optional
     )
 
-def compute_attributes(**attrs):
+def compute_attrs(**attrs):
     """Define multiple rule-cell attributes"""
     _make_multi(sys._getframe(1), attrs, factory=ReadOnlyCell, optional=True)
-compute.attributes = compute_attributes
+compute.attrs = compute_attrs
 
-def maintain_attributes(**attrs):
+def maintain_attrs(**attrs):
     """Define multiple rule-cell attributes"""
     _make_multi(sys._getframe(1), attrs)
-maintain.attributes = maintain_attributes
+maintain.attrs = maintain_attrs
 
-def variable_attributes(**attrs):
+def attrs(**attrs):
     """Define multiple value-cell attributes"""
     _make_multi(sys._getframe(1), attrs, arg='initially')
-variable.attributes = variable_attributes
 
-def variable_attributes_resetting_to(**attrs):
+
+def attrs_resetting_to(**attrs):
     """Define multiple receiver-cell attributes"""
     _make_multi(sys._getframe(1), attrs, arg='resetting_to')
-variable.attributes.resetting_to = variable_attributes_resetting_to
+attrs.resetting_to = attrs_resetting_to
 
 
 def _make_multi(frame, kw, wrap=CellAttribute.mkattr, arg='rule', **opts):
@@ -1032,7 +1032,8 @@ def _make_multi(frame, kw, wrap=CellAttribute.mkattr, arg='rule', **opts):
 
 
 def _build_descriptor(
-    rule=None, __frame=None, __name=None, __proptype = CellAttribute.mkattr, **kw
+    rule=None, __frame=None, __name=None, __proptype = CellAttribute.mkattr,
+    __ruleattr='rule', **kw
 ):
     frame = __frame or sys._getframe(2)
     name  = __name
@@ -1047,8 +1048,9 @@ def _build_descriptor(
                 rule.__name__ = name
             except TypeError:
                 pass  # Python 2.3 doesn't let you set __name__
-        return __proptype(__name__=name, rule=rule, **kw)
-        
+        kw[__ruleattr]=rule
+        return __proptype(__name__=name, **kw)
+
     if name:
         # Have everything we need, just go for it
         return callback(frame, name, rule, None)
@@ -1062,8 +1064,6 @@ def _build_descriptor(
         return decorators.decorate_assignment(callback, frame=frame)
 
 
-
-
 def todos(**attrs):
     """Define multiple todo-cell attributes"""
     _make_multi(sys._getframe(1), attrs, TodoProperty.mkattr)
@@ -1071,7 +1071,6 @@ def todos(**attrs):
 def todo(rule=None):
     """Define an attribute that can send "messages to the future" """
     return _build_descriptor(rule=rule, __proptype = TodoProperty.mkattr)
-
 
 class TodoProperty(CellAttribute):
     """Property representing a ``todo`` attribute"""
@@ -1094,16 +1093,17 @@ class TodoProperty(CellAttribute):
     def factory(self, rule, value, discrete):
         return TodoValue(rule)
 
+def build_value(make, ob, name):
+    if hasattr(make, '__get__'):
+        make = make.__get__(ob, type(ob))
+    return make()
 
-
-
-
-
-
-
-
-
-
+def make(rule=None, writable=False, optional=True):
+    """Create a Constant or Value, initialized from `rule()`"""
+    return _build_descriptor(
+        rule, optional=optional, __ruleattr='make',
+        factory=[Constant.from_attr, Cell][bool(writable)]
+    )
 
 class TodoValue(Value):
     """Value that logs changes for mutable data structures"""
@@ -1145,7 +1145,7 @@ class TodoValue(Value):
     def _finish(self):
         change_attr(self, '_savepoint', None)
         super(TodoValue, self)._finish()
-        
+
 class Dict(UserDict.IterableUserDict, Component):
     """Dictionary-like object that recalculates observers when it's changed
 
@@ -1187,12 +1187,10 @@ class Dict(UserDict.IterableUserDict, Component):
         raise TypeError
 
 
-    maintain()    
+    maintain(make=dict)
     def data(self):
         data = self.data
-        if data is None:
-            data = {}
-        elif self.deleted or self.changed:
+        if self.deleted or self.changed:
             old = [(k,data[k]) for k in self.deleted if k in data]
             old += [(k,data[k]) for k in self.changed if k in data]
             on_undo(data.update, dict(old))
@@ -1206,9 +1204,9 @@ class Dict(UserDict.IterableUserDict, Component):
             mark_dirty(); data.update(self.added)
         if self.changed:
             mark_dirty(); data.update(self.changed)
-        return data    
+        return data
 
-    decorators.decorate(modifier)    
+    decorators.decorate(modifier)
     def __setitem__(self, key, item):
         if key in self.to_delete:
             del self.to_delete[key]
@@ -1217,7 +1215,7 @@ class Dict(UserDict.IterableUserDict, Component):
         else:
             self.to_add[key] = item
 
-    decorators.decorate(modifier)    
+    decorators.decorate(modifier)
     def __delitem__(self, key):
         if key in self.to_add:
             del self.to_add[key]
@@ -1227,14 +1225,16 @@ class Dict(UserDict.IterableUserDict, Component):
                 del self.to_change[key]
         else:
             raise KeyError, key
-                
+
+
+
     decorators.decorate(modifier)
     def clear(self):
         self.to_add.clear()
         self.to_change.clear()
         self.to_delete.update(self.data)
 
-    decorators.decorate(modifier)    
+    decorators.decorate(modifier)
     def update(self, d=(), **kw):
         if d:
             if kw:
@@ -1290,12 +1290,12 @@ class List(UserList.UserList, Component):
         Component.__init__(self, **kw)
         self.data[:] = other
 
-    maintain()
+    maintain(make=list)
     def data(self):
         if self.changed:
             mark_dirty()
             return self.updated
-        return self.data or []
+        return self.data
 
     decorators.decorate(modifier)
     def __setitem__(self, i, item):
@@ -1404,7 +1404,7 @@ class Set(sets.Set, Component):
     added, removed = _added, _removed
     to_add = _added.future
     to_remove = _removed.future
-    
+
     def __init__(self, iterable=None, **kw):
         """Construct a set from an optional iterable."""
         Component.__init__(self, **kw)
@@ -1412,11 +1412,10 @@ class Set(sets.Set, Component):
             # we can update self._data in place, since no-one has seen it yet
             sets.Set._update(self, iterable)
 
-    maintain()
+    maintain(make=dict)
     def _data(self):
         """The dictionary containing the set data."""
         data = self._data
-        if data is None: data = {}
         pop = data.pop
         if self.removed:
             mark_dirty()
@@ -1430,6 +1429,7 @@ class Set(sets.Set, Component):
 
     def __setstate__(self, data):
         self.__init__(data[0])
+
 
 
 
@@ -1478,7 +1478,7 @@ class Set(sets.Set, Component):
     def clear(self):
         """Remove all elements from this set."""
         self.to_remove.update(self)
-        self.to_add.clear()              
+        self.to_add.clear()
 
     def __ior__(self, other):
         """Update a set with the union of itself and another."""
@@ -1514,14 +1514,14 @@ class Set(sets.Set, Component):
         return self
 
 
-        
+
     decorators.decorate(modifier)
     def symmetric_difference_update(self, other):
         """Update a set with the symmetric difference of itself and another."""
         data = self._data
         to_add = self.to_add
         to_remove = self.to_remove
-        for elt in to_dict_or_set(other):            
+        for elt in to_dict_or_set(other):
             if elt in to_add:
                 to_add.remove(elt)      # Got it; get rid of it
             elif elt in to_remove:
@@ -1553,6 +1553,6 @@ def to_dict_or_set(ob):
         return dict.fromkeys(ob)
     return ob
 
-  
+
 
 

@@ -11,7 +11,7 @@ __all__ = [
 class SubSet(trellis.Set):
     """Set that's constrained to be a subset of another set"""
 
-    base = trellis.compute(lambda self: trellis.Set(), writable=True)
+    base = trellis.make(trellis.Set, writable=True)
 
     trellis.compute()
     def added(self):
@@ -42,8 +42,8 @@ class SubSet(trellis.Set):
 class Observing(trellis.Component):
     """Monitor a set of keys for changes"""
 
-    lookup_func = trellis.variable(lambda x:x)
-    keys = trellis.compute(lambda self: trellis.Set())
+    lookup_func = trellis.attr(lambda x:x)
+    keys = trellis.make(trellis.Set)
 
     trellis.maintain()
     def _watching(self):
@@ -83,15 +83,15 @@ class Observing(trellis.Component):
 class SortedSet(trellis.Component):
     """Represent a set as a list sorted by a key"""
 
-    trellis.variable.attributes(
+    trellis.attrs(
         sort_key  = lambda x:x,  # sort on the object
         reverse = False,
         items = None,
         old_key = None,
         old_reverse = None
     )
-    data    = trellis.compute(lambda self: trellis.Set(), writable=True)
-    changes = trellis.variable(resetting_to=[])
+    data    = trellis.make(trellis.Set, writable=True)
+    changes = trellis.attr(resetting_to=[])
 
     def __getitem__(self, key):
         if self.reverse:

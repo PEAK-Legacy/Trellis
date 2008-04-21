@@ -99,11 +99,11 @@ if testreactor:
             EventLoop.call(log.append, 4)
 
             class IdleTimer(trellis.Component):
-                trellis.variable.attributes(
+                trellis.attrs(
                     idle_timeout = 20,
                     busy = False,
                 )
-                idle_for = trellis.compute(
+                idle_for = trellis.maintain(
                     lambda self: self.idle_for.begins_with(not self.busy),
                     initially=NOT_YET
                 )
@@ -1198,7 +1198,7 @@ class TestTasks(unittest.TestCase):
     def testPauseAndCall(self):
         log = []
         class TaskExample(trellis.Component):
-            trellis.variable.attributes(
+            trellis.attrs(
                 start = False,
                 stop = False
             )

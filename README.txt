@@ -155,14 +155,14 @@ define a rule that performs actions outside the Trellis.  Here's an example
 that uses all of these approaches, simply for the sake of illustration::
 
     >>> class Rectangle(trellis.Component):
-    ...     trellis.variable.attributes(
+    ...     trellis.attrs(
     ...         top = 0,
     ...         width = 20,
     ...     )
-    ...     left = trellis.variable(0)
-    ...     height = trellis.variable(30)
+    ...     left = trellis.attr(0)
+    ...     height = trellis.attr(30)
     ...
-    ...     trellis.compute.attributes(
+    ...     trellis.compute.attrs(
     ...         bottom = lambda self: self.top + self.height,
     ...     )
     ...
@@ -286,7 +286,7 @@ you can use trellis rules to create attributes that are automatically
 initialized, but then keep the same value thereafter::
 
     >>> class Demo(trellis.Component):
-    ...     aDict = trellis.compute(lambda self: {})
+    ...     aDict = trellis.make(dict)
 
     >>> d = Demo()
     >>> d.aDict
@@ -408,7 +408,7 @@ For that matter, you don't even need to define the rule in the same class!
 For example::
 
     >>> class Viewer(trellis.Component):
-    ...     model = trellis.variable(None)
+    ...     model = trellis.attr(None)
     ...
     ...     @trellis.perform
     ...     def view_it(self):
@@ -488,11 +488,11 @@ input changes more than a certain threshhold since the last value.  It's fairly
 easy to do this, using rules that refer to their previous value::
 
     >>> class NoiseFilter(trellis.Component):
-    ...     trellis.variable.attributes(
+    ...     trellis.attrs(
     ...         value = 0,
     ...         threshhold = 5,
     ...     )
-    ...     @trellis.compute(initially=0)
+    ...     @trellis.maintain(initially=0)
     ...     def filtered(self):
     ...         if abs(self.value - self.filtered) > self.threshhold:
     ...             return self.value
@@ -545,7 +545,7 @@ sort of like an "event", "message", or "command" in a GUI or other event-driven
 system::
 
     >>> class ChangeableRectangle(QuietRectangle):
-    ...     trellis.variable.attributes.resetting_to(
+    ...     trellis.attrs.resetting_to(
     ...         wider    = 0,
     ...         narrower = 0,
     ...         taller   = 0,
@@ -627,9 +627,9 @@ rectangle::
 
     >>> class Spinner(trellis.Component):
     ...     """Increase or decrease a value"""
-    ...     increase = trellis.variable(resetting_to=0)
-    ...     decrease = trellis.variable(resetting_to=0)
-    ...     by = trellis.variable(1)
+    ...     increase = trellis.attr(resetting_to=0)
+    ...     decrease = trellis.attr(resetting_to=0)
+    ...     by = trellis.attr(1)
     ...
     ...     def up(self):
     ...         self.increase = self.by
@@ -692,7 +692,7 @@ example, if you create a text editing widget for a GUI application, you can
 define a value cell for the text in its class::
 
     >>> class TextEditor(trellis.Component):
-    ...     text = trellis.variable('')
+    ...     text = trellis.attr('')
     ...
     ...     @trellis.perform
     ...     def display(self):
@@ -724,8 +724,8 @@ Let's look at an example.  Suppose you'd like to trigger an action whenever a
 new high temperature is seen::
 
     >>> class HighDetector(trellis.Component):
-    ...     value = trellis.variable(0)
-    ...     last_max = trellis.variable(None)
+    ...     value = trellis.attr(0)
+    ...     last_max = trellis.attr(None)
     ...
     ...     @trellis.maintain
     ...     def new_high(self):
@@ -1036,7 +1036,7 @@ dependency.  In fact, if you set a cell value from more than one rule, the
 Trellis will stop you, unless the values are equal.  For example::
 
     >>> class Conflict(trellis.Component):
-    ...     value = trellis.variable(99)
+    ...     value = trellis.attr(99)
     ...
     ...     @trellis.maintain
     ...     def ruleA(self):
@@ -1114,7 +1114,7 @@ inputs.  For example::
     >>> import sys
     
     >>> class ChangeTakesTime(trellis.Component):
-    ...     v1 = trellis.variable(2)
+    ...     v1 = trellis.attr(2)
     ...     v2 = trellis.compute(lambda self: self.v1*2)
     ...     @trellis.maintain
     ...     def update(self):
@@ -1489,14 +1489,11 @@ update an existing data structure::
     ...     added = trellis.todo(lambda self: [])
     ...     to_add = added.future
     ...
-    ...     @trellis.compute
+    ...     @trellis.maintain(make=list)
     ...     def items(self):
-    ...         items = self.items
-    ...         if items is None:
-    ...             items = []
     ...         if self.added:
-    ...             return items + self.added
-    ...         return items
+    ...             return self.items + self.added
+    ...         return self.items
 
     >>> q = Queue2()
     >>> view.model = q
@@ -1516,14 +1513,11 @@ Notice, by the way, that the ``items`` rule returns a new list every time there
 is a change.  If it didn't, the updates wouldn't be tracked::
 
     >>> class Queue3(Queue2):
-    ...     @trellis.compute
+    ...     @trellis.maintain(make=list)
     ...     def items(self):
-    ...         items = self.items
-    ...         if items is None:
-    ...             items = []
     ...         if self.added:
-    ...             items.extend(self.added)
-    ...         return items
+    ...             self.items.extend(self.added)
+    ...         return self.items
 
     >>> q = Queue3()
     >>> view.model = q
@@ -1546,11 +1540,9 @@ so that if the trellis needs to roll back some calculations involving your data
 structure, it can do so::
 
     >>> class Queue4(Queue2):
-    ...     @trellis.compute
+    ...     @trellis.maintain(make=list)
     ...     def items(self):
     ...         items = self.items
-    ...         if items is None:
-    ...             items = []
     ...         if self.added:
     ...             trellis.on_undo(items.__delitem__, slice(len(items),None))
     ...             items.extend(self.added)

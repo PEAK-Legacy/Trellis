@@ -1365,3 +1365,36 @@ Lazy cells
     >>> c2
     Constant({})
 
+
+CellAttribute
+-------------
+
+    >>> x = trellis.CellAttribute(z=22)
+    Traceback (most recent call last):
+      ...
+    TypeError: CellAttribute() has no keyword argument 'z'
+
+    >>> x = trellis.CellAttribute.mkattr(initially=None, resetting_to=None)
+    Traceback (most recent call last):
+      ...
+    TypeError: Can't specify both 'initially' and 'resetting_to'
+
+    >>> x = trellis.CellAttribute.mkattr(initially=None, make=list)
+    Traceback (most recent call last):
+      ...
+    TypeError: Can't specify both a value and 'make'
+
+    >>> x = trellis.CellAttribute.mkattr(resetting_to=None, make=list)
+    Traceback (most recent call last):
+      ...
+    TypeError: Can't specify both a value and 'make'
+
+    >>> trellis.CellAttribute.mkattr(resetting_to=42).initial_value(None)
+    42
+
+    >>> trellis.CellAttribute.mkattr(initially=99).initial_value(None)
+    99
+
+    >>> trellis.CellAttribute.mkattr(make=list).initial_value(None)
+    []
+

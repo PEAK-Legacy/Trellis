@@ -123,12 +123,12 @@ NOT_YET = _Timer(Max)
 
 class EventLoop(trellis.Component, context.Service):
     """Run an application event loop"""
-    trellis.variable.attributes(
+    trellis.attrs(
         running = False,
         stop_requested = False,
     )
 
-    _call_queue = trellis.compute(lambda self: [], writable=True)
+    _call_queue = trellis.make(list, writable=True)
     _next_time = trellis.compute(lambda self: Time.next_event_time(True))
 
     _callback_active = initialized = False
@@ -330,9 +330,9 @@ class Time(trellis.Component, context.Service):
     """Manage current time and intervals"""
 
     _now = EPOCH._when
-    auto_update = trellis.variable(True)
-    _schedule = trellis.compute(lambda self: [Max], writable=True)
-    _events = trellis.compute(lambda self: weakref.WeakValueDictionary())
+    auto_update = trellis.attr(True)
+    _schedule = trellis.make(lambda self: [Max], writable=True)
+    _events = trellis.make(weakref.WeakValueDictionary)
 
     trellis.maintain()
     def _updated(self):
@@ -432,7 +432,7 @@ class TaskCell(trellis.AbstractCell, stm.AbstractListener):
         return False
 
     decorators.decorate(classmethod)
-    def factory(cls, rule, value, discrete):
+    def from_attr(cls, rule, value, discrete):
         return cls(rule)
 
 
@@ -548,7 +548,7 @@ def resume():
 def task(rule=None, optional=False):
     """Define a task cell attribute"""
     return trellis._build_descriptor(
-        rule=rule, factory=TaskCell.factory, optional=optional
+        rule=rule, factory=TaskCell.from_attr, optional=optional
     )
 
 
