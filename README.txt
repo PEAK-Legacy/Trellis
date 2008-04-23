@@ -2,11 +2,9 @@
 Event-Driven Programming The Easy Way, with ``peak.events.trellis``
 ===================================================================
 
-(NOTE: As of 0.6a1, many advanced parts of the Trellis API have changed
-significantly.  If you've done a lot with the 0.5 version API, we strongly
-suggest reading the new manuals, especially the parts dealing with state
-change.  Many old restrictions have been lifted, but some were replaced with
-new ones.)
+(NOTE: As of 0.7a1, many new features have been added to the Trellis API,
+and some old ones have been deprecated.  If you are upgrading from an older
+version, please see the `porting guide`_ for details.)
 
 Whether it's an application server or a desktop application, any sufficiently
 complex system is event-driven -- and that usually means callbacks.
@@ -115,6 +113,8 @@ including the following manuals:
 
 * `Software Transactional Memory (STM) And Observers`_ (NEW for 0.6a1)
 
+* `Porting Code from Older Trellis Versions`_ (NEW for 0.7a1)
+
 Questions, discussion, and bug reports for the Trellis should be directed to
 the `PEAK mailing list`_.
 
@@ -125,6 +125,8 @@ the `PEAK mailing list`_.
 .. _Time, Event Loops, and Tasks: http://peak.telecommunity.com/DevCenter/TrellisActivity
 .. _Event-Driven Collections with the Trellis: http://peak.telecommunity.com/DevCenter/TrellisCollections
 .. _Software Transactional Memory (STM) And Observers: http://peak.telecommunity.com/DevCenter/TrellisSTM
+.. _Porting Code from Older Trellis Versions: http://peak.telecommunity.com/DevCenter/TrellisPorting
+.. _porting guide: http://peak.telecommunity.com/DevCenter/TrellisPorting
 
 .. _toc:
 .. contents:: **Table of Contents**

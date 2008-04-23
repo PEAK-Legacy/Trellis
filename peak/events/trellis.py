@@ -33,11 +33,11 @@ def init_attrs(self, **kw):
                 )
             setattr(self, k, v)
 
-
-
-
-
-
+def named_lambda(func, name):
+    if getattr(func,'__name__',None) == '<lambda>':
+        try: func.__name__ = name
+        except TypeError: pass  # Python 2.3 doesn't let you set __name__
+    return func
 
 class AbstractCell(object):
     """Base class for cells"""
@@ -46,6 +46,7 @@ class AbstractCell(object):
     rule = value = _value = _needs_init = None
     writer = connector = None
     was_set = False
+    _uninit_repr = ' [uninitialized]'
 
     def get_value(self):
         """Get the value of this cell"""
@@ -56,13 +57,12 @@ class AbstractCell(object):
         if getattr(self, 'rule', None) is not None:
             rule = repr(self.rule)+', '
         if self._needs_init:
-            ni = ' [uninitialized]'
+            ni = self._uninit_repr
         if getattr(self, '_reset', _sentinel) is not _sentinel:
             reset =', discrete['+repr(self._reset)+']'
         return '%s(%s%r%s%s)'% (
             self.__class__.__name__, rule, self._value, ni, reset
         )
-
 
 
 
@@ -453,6 +453,7 @@ class LazyCell(Sensor):
     """A ReadOnlyCell that is only recalculated when it has listeners"""
 
     __slots__ = ()
+    _uninit_repr = ' [inactive]'
 
     def __init__(self, rule, value=None, discrete=False):
         super(LazyCell, self).__init__(rule, value, discrete)
@@ -877,9 +878,7 @@ def _invoke_callback(
         items.append((CellValues, value))
 
     def callback(frame, name, func, locals):
-        if getattr(func,'__name__',None) == '<lambda>':
-            try: func.__name__ = name
-            except TypeError: pass  # Python 2.3 doesn't let you set __name__
+        named_lambda(func, name)
         for role, value in items:
             role.for_frame(frame).set(name, value)
         IsDiscrete.for_frame(frame).defaults[name] = False
@@ -892,6 +891,8 @@ def _invoke_callback(
     else:
         decorators.decorate_assignment(callback, frame=frame)
         return _sentinel
+
+
 
 
 
@@ -985,10 +986,9 @@ class CellAttribute(object):
 def attr(initially=NO_VALUE, resetting_to=NO_VALUE):
     return CellAttribute.mkattr(initially, resetting_to)
 
-def compute(rule=None, initially=NO_VALUE, resetting_to=NO_VALUE, writable=False):
+def compute(rule=None, resetting_to=NO_VALUE):
     return _build_descriptor(
-        rule=rule, initially=initially, resetting_to=resetting_to,
-        factory=[LazyCell,Cell][bool(writable)], optional=True
+        rule=rule, resetting_to=resetting_to, factory=LazyCell, optional=True
     )
 
 def maintain(rule=None, make=None, initially=NO_VALUE, resetting_to=NO_VALUE, optional=False):
@@ -1004,7 +1004,7 @@ def perform(rule=None, optional=False):
 
 def compute_attrs(**attrs):
     """Define multiple rule-cell attributes"""
-    _make_multi(sys._getframe(1), attrs, factory=ReadOnlyCell, optional=True)
+    _make_multi(sys._getframe(1), attrs, factory=LazyCell, optional=True)
 compute.attrs = compute_attrs
 
 def maintain_attrs(**attrs):
@@ -1023,13 +1023,13 @@ def attrs_resetting_to(**attrs):
 attrs.resetting_to = attrs_resetting_to
 
 
+
 def _make_multi(frame, kw, wrap=CellAttribute.mkattr, arg='rule', **opts):
     for k, v in kw.items():
         if k in frame.f_locals:
             raise TypeError("%s is already defined in this class" % (k,))
-        opts[arg] = v
+        opts[arg] = named_lambda(v, k)
         frame.f_locals[k]= wrap(__name__=k, **opts)
-
 
 def _build_descriptor(
     rule=None, __frame=None, __name=None, __proptype = CellAttribute.mkattr,
@@ -1037,18 +1037,12 @@ def _build_descriptor(
 ):
     frame = __frame or sys._getframe(2)
     name  = __name
-
-    if rule is not None:
+    if rule is not None and __ruleattr=='rule':
         if rule is not None and getattr(rule,'__name__','<lambda>')!='<lambda>':
             name = name or rule.__name__
 
     def callback(frame, name, rule, locals):
-        if getattr(rule,'__name__',None) == '<lambda>':
-            try:
-                rule.__name__ = name
-            except TypeError:
-                pass  # Python 2.3 doesn't let you set __name__
-        kw[__ruleattr]=rule
+        kw[__ruleattr] = named_lambda(rule, name)
         return __proptype(__name__=name, **kw)
 
     if name:
@@ -1062,7 +1056,6 @@ def _build_descriptor(
     else:
         # We're being used as a decorator, so just decorate.
         return decorators.decorate_assignment(callback, frame=frame)
-
 
 def todos(**attrs):
     """Define multiple todo-cell attributes"""
@@ -1104,6 +1097,14 @@ def make(rule=None, writable=False, optional=True):
         rule, optional=optional, __ruleattr='make',
         factory=[Constant.from_attr, Cell][bool(writable)]
     )
+
+def make_attrs(**attrs):
+    """Define multiple make-constant attributes"""
+    _make_multi(
+        sys._getframe(1), attrs,
+        factory=Constant.from_attr, arg='make', optional=True
+    )
+make.attrs = make_attrs
 
 class TodoValue(Value):
     """Value that logs changes for mutable data structures"""

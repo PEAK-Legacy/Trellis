@@ -334,6 +334,31 @@ Decorators
      'added': <bound method TodoProperty.make_cell of TodoProperty('added')>}
 
 
+    >>> class Test(trellis.Component):
+    ...     trellis.compute.attrs(
+    ...         x = lambda self: self.y
+    ...     )
+    ...     y = trellis.make(dict, writable=True)
+    >>> x=Test()
+    >>> x.x
+    {}
+    >>> trellis.Cells(x)
+    {'y': Value({}),
+     'x': LazyCell(<bound method Test.x of <Test object...>>, {} [inactive])}
+
+    >>> class Test(trellis.Component):
+    ...     trellis.compute.attrs(
+    ...         x = lambda self: self.y
+    ...     )
+    ...     trellis.make.attrs(y = dict)
+    >>> x=Test()
+    >>> x.x
+    {}
+    >>> trellis.Cells(x)
+    {'y': Constant({}), 'x': Constant({})}
+
+
+
 Error messages::
 
     >>> class Test:
