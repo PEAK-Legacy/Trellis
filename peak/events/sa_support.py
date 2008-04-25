@@ -1,6 +1,6 @@
 from sqlalchemy.orm.attributes import get_attribute,set_attribute,ClassManager
 from trellis import Cells, Effector, NO_VALUE, CellValues, CellFactories
-from trellis import ObserverCell
+from trellis import Performer
 from new import instancemethod
 
 class SAInstrument(ClassManager):
@@ -33,7 +33,7 @@ class SAInstrument(ClassManager):
                 for attr in attrs:
                     if cells[attr].was_set:
                         set_attribute(instance, attr, cells[attr].value)
-            instance._observer = ObserverCell(setter)
+            instance._observer = Performer(setter)
         super(SAInstrument, self).install_state(instance, state)
     
 

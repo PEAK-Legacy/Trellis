@@ -447,7 +447,7 @@ Or ``run()`` one that's already running::
 You can check an event loop's status using its ``running`` and
 ``stop_requested`` attributes, which are both normally false::
 
-    >>> @trellis.ObserverCell
+    >>> @trellis.Performer
     ... def LoopWatch():
     ...     print "Running  =", EventLoop.running
     ...     print "Stopping =", EventLoop.stop_requested

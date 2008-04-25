@@ -31,6 +31,8 @@ Simple Replacements
 * ``@optional @observer`` declarations should be replaced by
   ``@perform(optional=True)``
 
+* The type formerly known as ``ObserverCell`` is now ``Performer``
+
 
 Rule Declarations
 =================

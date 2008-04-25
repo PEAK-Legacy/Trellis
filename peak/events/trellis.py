@@ -1,7 +1,7 @@
 from thread import get_ident
 from weakref import ref
 from peak.util import addons, decorators
-import sys, UserDict, UserList, sets, stm
+import sys, UserDict, UserList, sets, stm, types
 from peak.util.extremes import Max
 from peak.util.symbols import Symbol, NOT_GIVEN
 
@@ -11,7 +11,7 @@ __all__ = [
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
     'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin', 'Sensor',
     'AbstractConnector', 'Connector',  'Effector', 'init_attrs',
-    'attr', 'attrs', 'compute', 'maintain', 'perform'
+    'attr', 'attrs', 'compute', 'maintain', 'perform', 'Performer',
 ]
 
 NO_VALUE = Symbol('NO_VALUE', __name__)
@@ -39,6 +39,18 @@ def named_lambda(func, name):
         except TypeError: pass  # Python 2.3 doesn't let you set __name__
     return func
 
+try:
+    set = set
+except NameError:
+    set = sets.Set
+    frozenset = sets.ImmutableSet
+    set_like = sets.BaseSet
+    dictlike = dict, sets.BaseSet
+else:
+    set_like = set, frozenset, sets.BaseSet
+    dictlike = (dict,) + set_like
+
+
 class AbstractCell(object):
     """Base class for cells"""
     __slots__ = ()
@@ -63,18 +75,6 @@ class AbstractCell(object):
         return '%s(%s%r%s%s)'% (
             self.__class__.__name__, rule, self._value, ni, reset
         )
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -260,7 +260,7 @@ class ConstantRule(ConstantMixin, ReadOnlyCell):
 
 
 
-class ObserverCell(stm.AbstractListener, AbstractCell):
+class Performer(stm.AbstractListener, AbstractCell):
     """Rule that performs non-undoable actions"""
 
     __slots__ = 'run', 'next_subject', '__weakref__'
@@ -269,20 +269,20 @@ class ObserverCell(stm.AbstractListener, AbstractCell):
 
     def __init__(self, rule):
         self.run = rule
-        super(ObserverCell, self).__init__()
+        super(Performer, self).__init__()
         atomically(schedule, self)
 
     decorators.decorate(classmethod)
     def from_attr(cls, rule, value, discrete):
         return cls(rule)
 
-ObserverCell.rule = ObserverCell.run    # alias the attribute for inspection
+Performer.rule = Performer.run    # alias the attribute for inspection
 
-
-
-
-
-
+class ObserverCell(Performer):
+    __slots__ = ()
+    def __init__(self, rule):
+        warndep("use 'Performer' in place of 'ObserverCell'")        
+        Performer.__init__(self, rule)
 
 
 def modifier(func):
@@ -484,7 +484,6 @@ class LazyCell(Sensor):
 class LazyConstant(ConstantRule, LazyCell):
     """LazyCell version of a constant"""
     __slots__ = ()
-
 
 
 
@@ -759,7 +758,7 @@ def mark_dirty():
 
 
 def observer_factory(typ, ob, name):
-    return default_factory(typ, ob, name, ObserverCell)
+    return default_factory(typ, ob, name, Performer)
 
 
 
@@ -999,7 +998,7 @@ def maintain(rule=None, make=None, initially=NO_VALUE, resetting_to=NO_VALUE, op
 
 def perform(rule=None, optional=False):
     return _build_descriptor(
-        rule=rule, factory=ObserverCell.from_attr, optional=optional
+        rule=rule, factory=Performer.from_attr, optional=optional
     )
 
 def compute_attrs(**attrs):
@@ -1037,8 +1036,8 @@ def _build_descriptor(
 ):
     frame = __frame or sys._getframe(2)
     name  = __name
-    if rule is not None and __ruleattr=='rule':
-        if rule is not None and getattr(rule,'__name__','<lambda>')!='<lambda>':
+    if isinstance(rule, types.FunctionType): # only pick up name if a function
+        if frame.f_locals.get(rule.__name__) is rule:   # and locally-defined!
             name = name or rule.__name__
 
     def callback(frame, name, rule, locals):
@@ -1165,9 +1164,9 @@ class Dict(UserDict.IterableUserDict, Component):
     always happen in the present, whereas writing is done to the future version
     of the dictionary.
     """
-    added = todo(lambda self: {})
-    deleted = todo(lambda self: {})
-    changed = todo(lambda self: {})
+    added = todo(dict)
+    deleted = todo(dict)
+    changed = todo(dict)
 
     to_add = added.future
     to_change = changed.future
@@ -1285,7 +1284,7 @@ class List(UserList.UserList, Component):
 
     updated = todo(lambda self: self.data[:])
     future  = updated.future
-    changed = todo(lambda self: False)
+    changed = todo(bool)
 
     def __init__(self, other=(), **kw):
         Component.__init__(self, **kw)
@@ -1400,8 +1399,8 @@ class Set(sets.Set, Component):
     any rule that simply uses the set (e.g. iterates over it, checks for
     membership or size, etc.) will be recalculated if the set is changed.
     """
-    _added = todo(lambda self: set())
-    _removed = todo(lambda self: set())
+    _added = todo(set)
+    _removed = todo(set)
     added, removed = _added, _removed
     to_add = _added.future
     to_remove = _removed.future
@@ -1532,17 +1531,6 @@ class Set(sets.Set, Component):
             else:
                 to_add.add(elt)         # Don't got it; add it
 
-try:
-    set = set
-except NameError:
-    set = sets.Set
-    frozenset = sets.ImmutableSet
-    set_like = sets.BaseSet
-    dictlike = dict, sets.BaseSet
-else:
-    set_like = set, frozenset, sets.BaseSet
-    dictlike = (dict,) + set_like
-
 def to_dict_or_set(ob):
     """Return the most basic set or dict-like object for ob
     If ob is a sets.BaseSet, return its ._data; if it's something we can tell
@@ -1553,6 +1541,17 @@ def to_dict_or_set(ob):
     elif not isinstance(ob, dictlike):
         return dict.fromkeys(ob)
     return ob
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -255,7 +255,7 @@ some trellis-ized data structure::
 
     >>> def show():
     ...     print "Changes:", o.changes
-    >>> c = trellis.ObserverCell(show)
+    >>> c = trellis.Performer(show)
     Changes: {}
 
 The ``changes`` attribute is a dictionary (a regular dictionary, not a

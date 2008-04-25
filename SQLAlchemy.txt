@@ -46,7 +46,7 @@ Using the Trellis with SQLAlchemy
 
     >>> def spy():
     ...     print "Ed's password is", ed_user.password
-    >>> spy = trellis.ObserverCell(spy)
+    >>> spy = trellis.Performer(spy)
     Ed's password is edspassword
 
     >>> from sqlalchemy.orm import sessionmaker

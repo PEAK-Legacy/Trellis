@@ -402,7 +402,7 @@ class TestController(unittest.TestCase):
             return 1
         c1 = trellis.Cell(aRule)
         c2 = trellis.Cell(lambda: c1.value * aRule())
-        c3 = trellis.ObserverCell(lambda: c2.value)
+        c3 = trellis.Performer(lambda: c2.value)
         self.assertEqual(log, [True, True])        
 
 
@@ -1088,7 +1088,7 @@ class TestDefaultEventLoop(unittest.TestCase):
     def testScheduleUndo(self):
         t = Time()
         t.auto_update = False
-        d(trellis.ObserverCell)
+        d(trellis.Performer)
         def err_after_reached():
             if len(t._schedule)>1:
                 raise DummyError
@@ -1105,7 +1105,7 @@ class TestDefaultEventLoop(unittest.TestCase):
         self.assertEqual(log, [])
 
     def force_rollback(self):
-        d(trellis.ObserverCell)
+        d(trellis.Performer)
         def do_it():
             raise DummyError
 

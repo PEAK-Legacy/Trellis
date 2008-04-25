@@ -316,7 +316,7 @@ Decorators
     ...     )
     ...     to_add = added.future
     ...     to_remove = removed.future
-    ...     decorate(activity.task)
+    ...     activity.task()
     ...     def task(self): yield None
 
     >>> CellRules(Test)
@@ -560,7 +560,7 @@ Repeating, Polling, Recalc
     >>> c = Cell(count, 0)
 
     >>> def hello(): print "c =", c.value
-    >>> c1 = ObserverCell(hello)
+    >>> c1 = Performer(hello)
     c = calculating
     1
     >>> c.value
@@ -718,7 +718,7 @@ Dictionaries
     ...     for name in 'added', 'changed', 'deleted':
     ...         if getattr(d,name):
     ...             print name, '=', getattr(d,name)
-    >>> dump = ObserverCell(dump)
+    >>> dump = Performer(dump)
     >>> dump.value
 
     >>> d[2] = 3
@@ -779,7 +779,7 @@ Lists
     >>> def dump():
     ...     if L.changed:
     ...         print "changed to", L
-    >>> dump = ObserverCell(dump)
+    >>> dump = Performer(dump)
     >>> dump.value
 
     >>> hash(L)
@@ -863,7 +863,7 @@ Sets
     ...     for name in 'added', 'removed':
     ...         if getattr(s, name):
     ...             print name, '=', list(getattr(s,name))
-    >>> dump = ObserverCell(dump)
+    >>> dump = Performer(dump)
     >>> dump.value
 
     >>> s.clear()
@@ -957,7 +957,7 @@ Observers::
     >>> v = trellis.Value(26)
     >>> def o():
     ...     print "value is", v.value
-    >>> o = trellis.ObserverCell(o)
+    >>> o = trellis.Performer(o)
     value is 26
     >>> v.value = 27
     value is 27
@@ -968,7 +968,7 @@ Observers::
     >>> def fail():
     ...     v.value = 99
 
-    >>> trellis.ObserverCell(fail)
+    >>> trellis.Performer(fail)
     Traceback (most recent call last):
       ...
     RuntimeError: Can't change objects during @perform or @compute
@@ -1296,7 +1296,7 @@ Effectors
     ...         global some_global
     ...         some_global = c.value
 
-    >>> writer = trellis.ObserverCell(writer)
+    >>> writer = trellis.Performer(writer)
     connecting Effector(<bound method GlobalConnector.read of...>, 42)
 
     >>> c2 = trellis.Cell(lambda: c.value)
