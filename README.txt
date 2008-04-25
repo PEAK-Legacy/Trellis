@@ -1457,6 +1457,43 @@ that maintains an index of items sorted by keys, with a cell that lists
 changed regions.  (See the `Collections manual`_ for more details.)
 
 
+trellis.Pipe
+------------
+
+A ``trellis.Pipe`` is a little bit like a Python list, except it only has
+supports for 5 methods: ``append``, ``extend``, ``__iter__``, ``__len__``,
+and ``__contains__``.  Its purpose is to allow you to easily interconnect
+components that communicate streams of objects or data, not unlike an operating
+system pipe.  You can use ``append()`` and ``extend()`` to put data in the
+pipe, and use the other methods to get it back out.  And it resets itself to
+being empty after all of its observers have had a chance to see the contents::
+
+    >>> p = trellis.Pipe()
+
+    >>> view.model = p
+    []
+
+    >>> p.append(42)
+    [42]
+    []
+
+    >>> p.extend([27, 59])
+    [27, 59]
+    []
+
+One common use for pipes is to allow you to create objects that communicate
+via sockets or other IPC.  If you write a component so that it expects to
+receive its inputs via one pipe, and sends output to another, then those pipes
+can be connected at runtime to a socket.  And at *test* time, you can just
+append data to the input pipe, and have a performer spit out what gets written
+to the output pipe.
+
+The ``Pipe`` type is the trellis's simplest data structure type -- so you may
+want to have a peek at its source code after you read the next section. (Better
+still, try to write your *own* ``Pipe`` clone first, and then compare it to the
+real one!)
+
+
 Creating Your Own Data Structures
 ---------------------------------
 
@@ -1704,6 +1741,10 @@ only add in-place updates if and when you can prove that the data copying is
 unacceptable overhead, since such updates are harder to write in a
 provably-correct way.  (Note, too, that Python's built-in data types can
 often copy data a lot faster than you'd expect...)
+
+
+A Practical Example -- and ``trellis.Pipe``
+-------------------------------------------
 
 
 Other Things You Can Do With A Trellis

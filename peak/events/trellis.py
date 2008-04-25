@@ -11,7 +11,7 @@ __all__ = [
     'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
     'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin', 'Sensor',
     'AbstractConnector', 'Connector',  'Effector', 'init_attrs',
-    'attr', 'attrs', 'compute', 'maintain', 'perform', 'Performer',
+    'attr', 'attrs', 'compute', 'maintain', 'perform', 'Performer', 'Pipe',
 ]
 
 NO_VALUE = Symbol('NO_VALUE', __name__)
@@ -1145,6 +1145,47 @@ class TodoValue(Value):
     def _finish(self):
         change_attr(self, '_savepoint', None)
         super(TodoValue, self)._finish()
+
+class Pipe(Component):
+    """Allow one or more writers to send data to zero or more readers"""
+
+    output = todo(list)
+    input  = output.future
+
+    decorators.decorate(modifier)
+    def append(self, value):
+        self.input.append(value)
+
+    decorators.decorate(modifier)
+    def extend(self, sequence):
+        self.input.extend(sequence)
+
+    def __iter__(self):
+        return iter(self.output)
+
+    def __contains__(self, value):
+        return value in self.output
+
+    def __len__(self):
+        return len(self.output)
+
+    def __repr__(self):
+        return repr(self.output)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class Dict(UserDict.IterableUserDict, Component):
     """Dictionary-like object that recalculates observers when it's changed

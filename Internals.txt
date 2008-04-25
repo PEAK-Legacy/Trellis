@@ -1423,3 +1423,55 @@ CellAttribute
     >>> trellis.CellAttribute.mkattr(make=list).initial_value(None)
     []
 
+
+Pipe
+----
+
+    >>> p = trellis.Pipe()
+    >>> def show(): print p
+    >>> show = trellis.Performer(show)
+    []
+    >>> p.append(1)
+    [1]
+    []
+    >>> p.extend([2,3])
+    [2, 3]
+    []
+    >>> def add_many(*args):
+    ...     for arg in args:
+    ...         p.append(arg)
+    >>> add_many = trellis.modifier(add_many)
+
+    >>> add_many(7,8,9)
+    [7, 8, 9]
+    []
+
+    >>> def show(): print 42 in p
+    >>> show = trellis.Performer(show)
+    False
+
+    >>> p.append(27)
+    False
+    False
+
+    >>> p.append(42)
+    True
+    False
+    
+    >>> def show(): print list(p)
+    >>> show = trellis.Performer(show)
+    []
+    >>> p.append(99)
+    [99]
+    []
+
+    >>> def show(): print len(p)
+    >>> show = trellis.Performer(show)
+    0
+    >>> add_many(3,4,5)
+    3
+    0
+
+
+
+
