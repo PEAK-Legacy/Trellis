@@ -408,14 +408,6 @@ class TestController(unittest.TestCase):
 
 
 
-
-
-
-
-
-
-
-
     d(a)
     def testWriteProcessingInRun(self):
         stm.Link(self.s1, self.t0)
@@ -1088,16 +1080,16 @@ class TestDefaultEventLoop(unittest.TestCase):
     def testScheduleUndo(self):
         t = Time()
         t.auto_update = False
-        d(trellis.Performer)
-        def err_after_reached():
-            if len(t._schedule)>1:
-                raise DummyError
         t20 = t[20]
         log = []
         d(trellis.Cell)
         def checktime():
             t.reached(t20)
             log.append(t._events[t20._when])
+            d(trellis.Performer)
+            def err_after_reached():
+                if len(t._schedule)>1:
+                    raise DummyError
         self.assertRaises(DummyError, checktime.get_value)
         self.assertEqual(t._schedule, [t20._when, Max])
         self.assertEqual(dict(t._events), {})

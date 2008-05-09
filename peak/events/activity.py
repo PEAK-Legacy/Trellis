@@ -358,7 +358,7 @@ class Time(trellis.Component, context.Service):
             heapq.heappush(self._schedule, when)
             self._events[when] = e = trellis.Value(False)
             trellis.on_undo(self._events.pop, when, None)
-            trellis.changed(trellis.Cells(self)['_schedule'])
+            trellis.on_commit(trellis.changed, trellis.Cells(self)['_schedule'])
         return e
 
     def __getitem__(self, interval):
