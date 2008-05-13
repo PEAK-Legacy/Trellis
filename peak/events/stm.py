@@ -211,9 +211,10 @@ class STMHistory(object):
 
         if typ is None:
             try:
-                for (f,a) in self.at_commit: f(*a)
+                self.checkpoint()
             except:
                 typ, val, tb = sys.exc_info()
+
         if typ is not None:
             try:
                 self.rollback_to(0)
@@ -243,7 +244,6 @@ class STMHistory(object):
 
 
 
-
     def rollback_to(self, sp=0):
         """Rollback to the specified savepoint"""
         assert self.active, "Can't rollback without active history"
@@ -266,11 +266,11 @@ class STMHistory(object):
         self.at_commit.append((func, args))
         self.undo.append((self.at_commit.pop,()))
 
-
-
-
-
-
+    def checkpoint(self):
+        """Invoke actions registered w/``on_commit()``, and clear the queue"""
+        for (f,a) in self.at_commit:
+            f(*a)
+        del self.at_commit[:]
 
 
 
@@ -303,12 +303,9 @@ class Controller(STMHistory):
         from peak.events.trellis import Value
         self.pulse = Value(0)
 
-    def cleanup(self, *args):
-        try:
-            self.has_run.clear()
-            return super(Controller, self).cleanup(*args)
-        finally:
-            self.current_listener = None
+    def checkpoint(self):
+        self.has_run.clear()
+        return super(Controller, self).checkpoint()
 
     def _retry(self):
         try:
@@ -324,6 +321,9 @@ class Controller(STMHistory):
         finally:
             self.to_retry.clear()
             self.destinations = self.routes = None
+
+
+
 
 
     def _unrun(self, listener, notified):
@@ -483,7 +483,7 @@ class Controller(STMHistory):
                     else:
                         del queues[layers[0]]
                         heapq.heappop(layers)
-                self.cleanup()
+                self.checkpoint()
             return retval
         except:
             del self.layers[:]

@@ -324,7 +324,7 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.writes, {self.s2:self.t0})
         self.ctrl.reads.clear()     # these would normally be handled by
         self.ctrl.writes.clear()    # the run() method's try/finally
-
+        self.ctrl.current_listener = None   # reset
 
     d(a)
     def testNoReadDuringCommit(self):
@@ -346,7 +346,7 @@ class TestController(unittest.TestCase):
         # Only t0 is notified, not t1, since t1 is the listener
         self.assertEqual(self.ctrl.queues, {2: {self.t0:1}})
         self.ctrl.rollback_to(sp)
-
+        self.ctrl.current_listener = None   # reset
 
     d(a)
     def testDependencyUpdatingAndUndo(self):
@@ -362,6 +362,10 @@ class TestController(unittest.TestCase):
         self.assertEqual(list(self.t0.iter_subjects()), [self.s2, self.s1])
         self.ctrl.rollback_to(sp)
         self.assertEqual(list(self.t0.iter_subjects()), [s3, self.s1])
+        self.ctrl.current_listener = None   # reset
+
+
+
 
     def runAs(self, listener, rule):
         listener.run = rule
@@ -398,15 +402,11 @@ class TestController(unittest.TestCase):
     def testNestedReadOnly(self):
         log = []
         def aRule():
-            log.append(trellis.ctrl.readonly)
-            return 1
+            log.append(trellis.ctrl.readonly); return 1
         c1 = trellis.Cell(aRule)
         c2 = trellis.Cell(lambda: c1.value * aRule())
         c3 = trellis.Performer(lambda: c2.value)
         self.assertEqual(log, [True, True])        
-
-
-
 
     d(a)
     def testWriteProcessingInRun(self):
@@ -543,7 +543,7 @@ class TestController(unittest.TestCase):
             sp.append(self.ctrl.savepoint())
         self.ctrl.atomically(go)
 
-    def testManagerCanCreateLoop(self):
+    def testManagerCantCreateLoop(self):
         class Mgr:
             def __enter__(self): pass
             def __exit__(*args):
@@ -554,6 +554,8 @@ class TestController(unittest.TestCase):
         self.t1.run = rule1
         self.t0.run = lambda:self.ctrl.manage(Mgr())
         self.ctrl.atomically(self.ctrl.schedule, self.t0)
+        self.assertEqual(log, [])
+        self.ctrl.atomically(lambda:None)
         self.assertEqual(log, [True])
 
     d(a)
@@ -566,9 +568,7 @@ class TestController(unittest.TestCase):
         self.assertEqual(self.ctrl.queues, {2: {self.t2:1}})
         self.ctrl.cancel(self.t2)
         self.ctrl.writes.clear()
-
-
-
+        self.ctrl.current_listener = None   # reset
 
 
 
@@ -649,6 +649,47 @@ class TestController(unittest.TestCase):
         self.assertEqual(list(self.t1.iter_subjects()), [self.s1])
         self.assertEqual(list(self.t2.iter_subjects()), [self.s2])
         self.ctrl.rollback_to(self.ctrl.has_run[self.t1])  # should undo both t1/t2
+
+
+
+
+
+    def testUndoLogSpansMultipleRecalcs(self):
+        c1 = trellis.Value(False, discrete=True)
+        c2 = trellis.Cell(lambda: (c1.value, log.append(trellis.savepoint())))
+        log = []; c2.value; log = []; c1.value = True
+        self.failUnless(len(log)==2 and log[1]>log[0], log)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
