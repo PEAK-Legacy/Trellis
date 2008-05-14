@@ -1275,6 +1275,62 @@ Sensors and Connectors
     NOT_GIVEN
 
 
+    >>> class Demo(trellis.Component):
+    ...     a = trellis.compute(lambda self:trellis.noop())
+    ...     a.connector()
+    ...     def _connect_a(self, sensor):
+    ...         print "connecting", sensor
+    ...         v = trellis.Value(42)
+    ...         # this read should not produce a dependency, because
+    ...         # connect/disconnect methods are in an implicit @modifier:
+    ...         v.value     
+    ...         return sensor
+    ...     a.disconnector()
+    ...     def _disconnect_a(self, sensor, key):
+    ...         print "disconnecting", key
+    ...     trellis.perform(optional=False)
+    ...     def p(self):
+    ...         poll()
+    ...         print "recalc"
+
+    >>> d = Demo()
+    recalc
+
+    >>> print d.a
+    recalc
+    None
+
+    >>> c = trellis.Cells(d)['a']
+    >>> c
+    Sensor(<bound method Demo.a of...>, None)
+
+    >>> c2 = trellis.Cell(lambda: c.value)
+
+    >>> print c2.value
+    recalc
+    connecting Sensor(<bound method Demo.a of...>, None)
+    recalc
+    None
+
+    >>> c.receive(42)
+    recalc
+
+    >>> c.value
+    42
+    >>> c2.value
+    42
+
+    >>> del c2
+    recalc
+    disconnecting Sensor(<bound method Demo.a of...>, 42)
+    recalc
+
+    >>> c.listening
+    NOT_GIVEN
+
+    >>> del d.__cells__['p']    # get rid of 'recalc' printing
+
+
 Effectors
 ---------
 
@@ -1422,6 +1478,80 @@ CellAttribute
 
     >>> trellis.CellAttribute.mkattr(make=list).initial_value(None)
     []
+
+    >>> trellis.CellAttribute.mkattr(make=list).can_connect()
+    True
+
+    >>> trellis.CellAttribute.mkattr(resetting_to=42).can_connect()
+    True
+
+    >>> trellis.TodoProperty.mkattr(rule=list).can_connect()
+    False
+
+
+    >>> class Test(trellis.Component):
+    ...     t = trellis.todo(list)
+    ...     t.connector(lambda self: None)
+    Traceback (most recent call last):
+      ...
+    TypeError: TodoProperty('t') cannot have a .connector
+
+    >>> class Test(trellis.Component):
+    ...     t = trellis.todo(list)
+    ...     t.disconnector(lambda self: None)
+    Traceback (most recent call last):
+      ...
+    TypeError: TodoProperty('t') cannot have a .disconnector
+
+    >>> t = trellis.compute(lambda self: 42)
+    >>> t.connect, t.disconnect
+    (None, None)
+
+    >>> conn = lambda self:23
+    >>> t = t.connector(conn)
+    >>> t = t.connector(conn)
+    Traceback (most recent call last):
+      ...
+    TypeError: CellAttribute('t') already has a .connector
+
+    >>> t.connect is conn
+    True
+
+    >>> t.make_cell(int, 42, 't')
+    Traceback (most recent call last):
+      ...
+    TypeError: CellAttribute('t') is missing a .disconnector
+    
+    >>> disc = lambda self:99
+    >>> t = t.disconnector(disc)
+    >>> t = t.disconnector(disc)
+    Traceback (most recent call last):
+      ...
+    TypeError: CellAttribute('t') already has a .disconnector
+    
+    >>> t.disconnect is disc
+    True
+
+    >>> t.make_cell(int, 42, 't')
+    Sensor(<bound method int.t of 42>, None [uninitialized])
+
+    >>> t.connect = None    
+    >>> t.make_cell(int, 42, 't')
+    Traceback (most recent call last):
+      ...
+    TypeError: CellAttribute('t') is missing a .connector
+
+    >>> t.rule = AbstractConnector()
+    >>> t = t.connector(conn)
+    Traceback (most recent call last):
+      ...
+    TypeError: The rule for CellAttribute('t')  is itself a Connector
+
+    >>> t.disconnect = None    
+    >>> t = t.disconnector(disc)
+    Traceback (most recent call last):
+      ...
+    TypeError: The rule for CellAttribute('t')  is itself a Connector
 
 
 Pipe

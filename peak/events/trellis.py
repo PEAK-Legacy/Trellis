@@ -348,7 +348,7 @@ class SensorBase(ReadOnlyCell):
         was_seen = get_next_listener(self) is not None
         set_next_listener(self, listener)
         if was_seen != (listener is not None) and self.connector is not None:
-            atomically(schedule, self.update_connection)
+            atomically(on_commit, schedule, self.update_connection)
 
     next_listener = property(get_next_listener, _set_listener)
 
@@ -368,28 +368,30 @@ class SensorBase(ReadOnlyCell):
 
 
     def update_connection():
-        self = ctrl.current_listener.im_self
-        descr = type(self).listening
-        listening = descr.__get__(self)
-        if self.next_listener is not None:
-            if listening is NOT_GIVEN:
-                descr.__set__(self, self.connector.connect(self))
-        elif listening is not NOT_GIVEN:
-            self.connector.disconnect(self, listening)
-            descr.__set__(self, NOT_GIVEN)
+        old_listener, ctrl.current_listener = ctrl.current_listener, None
+        try:
+            self = old_listener.im_self
+            descr = type(self).listening
+            listening = descr.__get__(self)
+            if self.next_listener is not None:
+                if listening is NOT_GIVEN:
+                    descr.__set__(self, self.connector.connect(self))
+            elif listening is not NOT_GIVEN:
+                self.connector.disconnect(self, listening)
+                descr.__set__(self, NOT_GIVEN)
+        finally:
+            ctrl.current_listener = old_listener
 
     update_connection.run = update_connection
     update_connection.next_subject = update_connection.next_listener = None
-    update_connection.layer = Max
+    update_connection.layer = -1
 
 class Sensor(SensorBase):
     """A cell that can receive value callbacks from the outside world"""
     __slots__ = 'connector', 'listening'
 
-
 class AbstractConnector(object):
     """Base class for rules that connect to the outside world"""
-
     __slots__ = ()
 
     def read(self):
@@ -401,12 +403,10 @@ class AbstractConnector(object):
         """Connect the sensor to the outside world, returning disconnect key
 
         This method must arrange callbacks to ``sensor.receive(value)``, and
-        return an object suitable for use by ``disconnect()``.
-        """
+        return an object suitable for use by ``disconnect()``."""
 
     def disconnect(self, sensor, key):
         """Disconnect the key returned by ``connect()``"""
-
 
 class Connector(AbstractConnector):
     """Trivial connector, wrapping three functions"""
@@ -415,10 +415,16 @@ class Connector(AbstractConnector):
 
     def __init__(self, connect, disconnect, read=None):
         if read is None:
-            read = lambda: ctrl.current_listener._value
+            read = noop
         self.read = read
         self.connect = connect
         self.disconnect = disconnect
+
+
+def noop():
+    """A rule that leaves its current/initial value unchanged"""
+    return ctrl.current_listener._value
+
 
 
 class LazyConnector(AbstractConnector):
@@ -437,12 +443,6 @@ class LazyConnector(AbstractConnector):
             on_undo(stm.Link, link.subject, sensor)
             link.unlink()
             link = nxt
-
-
-
-
-
-
 
 
 
@@ -468,7 +468,7 @@ class LazyCell(Sensor):
             ctrl.with_readonly(run)
         else: run()
         if self.listening is NOT_GIVEN:  # may need to disconnect...
-            self.listening = None; schedule(self.update_connection)
+            self.listening = None; on_commit(schedule, self.update_connection)
 
     def _const_class(self):
         return LazyConstant
@@ -891,11 +891,11 @@ def _invoke_callback(
         decorators.decorate_assignment(callback, frame=frame)
         return _sentinel
 
-
-
-
-
-
+def bind(rule, ob, typ=None):
+    if hasattr(rule, '__get__'):
+        return rule.__get__(ob, typ)
+    return rule
+    
 
 
 
@@ -904,7 +904,7 @@ class CellAttribute(object):
     """Self-contained cell descriptor"""
 
     value = NO_VALUE
-    rule = None
+    rule = connect = disconnect = None
     make = None
     factory = Cell
     discrete = False
@@ -921,10 +921,25 @@ class CellAttribute(object):
         return self.value
 
     def make_cell(self, typ, ob, name):
-        rule = self.rule
-        if hasattr(rule, '__get__'):
-            rule = rule.__get__(ob, typ)
+        rule = bind(self.rule, ob, typ)
+        if self.connect is not None or self.disconnect is not None:
+            connect = bind(self.connect, ob, typ)
+            disconnect = bind(self.disconnect, ob, typ)
+            missing = 'disconnect'
+            if connect is None:
+                missing='connect'
+            if connect is None or disconnect is None:
+                raise TypeError("%r is missing a .%sor" % (self,missing))
+            rule = Connector(connect, disconnect, rule)
         return self.factory(rule, self.initial_value(ob), self.discrete)
+
+    def connector(self, func=None):
+        """Decorate a method as providing a connect function for this cell"""
+        return self._hook_method('connect', func)
+
+    def disconnector(self, func=None):
+        """Decorate a method as providing a disconnect function for this cell"""
+        return self._hook_method('disconnect', func)
 
     def __get__(self, ob, typ=None):
         if ob is None:
@@ -939,7 +954,6 @@ class CellAttribute(object):
             name = self.__name__
             cell = cells.setdefault(name, self.make_cell(typ, ob, name))
         return cell.value
-
 
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self.__name__)
@@ -967,6 +981,7 @@ class CellAttribute(object):
                 cell = cells.setdefault(name, cell)
             cell.value = value
 
+
     decorators.decorate(classmethod)
     def mkattr(cls, initially=NO_VALUE, resetting_to=NO_VALUE, **kw):
         if initially is not NO_VALUE and resetting_to is not NO_VALUE:
@@ -980,6 +995,73 @@ class CellAttribute(object):
             raise TypeError("Can't specify both a value and 'make'")
 
         return cls(value=value, discrete=discrete, **kw)
+
+
+    def can_connect(self):
+        """Can this attribute have ``.connect`` and ``.disconnect`` methods?
+
+        By default, only @compute and @maintain rules can.  Subclasses should
+        override this if they override ``factory()`` and still want to support
+        connect/disconnect methods.
+        """
+        if self.factory is LazyCell:
+            self.factory = Sensor   # XXX kludge!
+        else:
+            return self.factory is Cell or self.factory is Sensor
+        return True
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def _hook_method(self, methodname, func=None, frame=None):
+        if not self.can_connect():
+            raise TypeError("%r cannot have a .%sor" % (self, methodname))
+
+        if isinstance(self.rule, AbstractConnector):
+            raise TypeError("The rule for %r is itself a Connector" % (self,))
+
+        if getattr(self, methodname) is not None:
+            raise TypeError("%r already has a .%sor" % (self, methodname))
+
+        if func is not None:
+            setattr(self, methodname, func)
+            return self
+
+        frame = frame or sys._getframe(2)
+        def callback(frame, name, func, locals):
+            setattr(self, methodname, func)
+            if name==self.__name__ and locals.get(name) is self:
+                return self
+            return func
+
+        return decorators.decorate_assignment(callback, frame=frame)
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def attr(initially=NO_VALUE, resetting_to=NO_VALUE):
