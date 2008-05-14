@@ -428,12 +428,12 @@ class TaskCell(trellis.AbstractCell, stm.AbstractListener):
         if not self._scheduled:
             trellis.change_attr(self, '_scheduled', True)
             trellis.on_commit(self._loop.call, trellis.atomically, self.do_run)
-            trellis.on_commit(trellis.change_attr, self, '_scheduled', False)
         return False
 
     decorators.decorate(classmethod)
     def from_attr(cls, rule, value, discrete):
         return cls(rule)
+
 
 
 
@@ -491,6 +491,7 @@ class TaskCell(trellis.AbstractCell, stm.AbstractListener):
 
 
     def do_run(self):
+        trellis.change_attr(self, '_scheduled', False)
         ctrl = trellis.ctrl
         ctrl.current_listener = self
         try:
@@ -522,7 +523,6 @@ decorators.struct()
 def Return(value):
     """Wrapper for yielding a value from a task"""
     return value,
-
 
 
 

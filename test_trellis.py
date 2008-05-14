@@ -1351,6 +1351,47 @@ class TestTasks(unittest.TestCase):
 
 
 
+    def testResumeOnlyOnceUntilFlushed(self):        
+        log = []
+        c1 = trellis.Value(1)
+        c2 = trellis.Value(2)
+        def f():
+            for i in range(3):
+                c1.value, c2.value
+                log.append(i)
+                yield activity.Pause
+            
+        t = activity.TaskCell(f)
+        self.assertEqual(log, [])
+        EventLoop.flush()
+        self.assertEqual(log, [0])
+        c1.value = 3
+        self.assertEqual(log, [0])
+        c2.value = 4
+        EventLoop.flush()
+        self.assertEqual(log, [0, 1])
+        
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def additional_tests():
     import doctest, sys
     files = [
