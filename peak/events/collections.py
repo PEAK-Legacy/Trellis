@@ -4,7 +4,7 @@ from trellis import set
 from new import instancemethod
 
 __all__ = [
-    'SortedSet', 'SubSet', 'Observing',
+    'SortedSet', 'SubSet', 'Observing', 'Hub'
 ]
 
 
@@ -26,6 +26,88 @@ class SubSet(trellis.Set):
             return set(self._removed) | set(self.base.removed)
         else:
             return self._removed
+
+
+
+
+
+
+
+
+
+
+
+
+
+class Hub(trellis.Component):
+    """Pub/sub messaging"""
+
+    def get(self, *rule):
+        """Return messages of same length with matching non-``None`` args"""
+        return self._queries[rule].value
+
+    def put(self, *row):
+        """Send a message to any active subscribers"""
+        self._inputs.append(row)
+
+    _queries = trellis.cellcache(lambda self,key:(), resetting_to=())
+    _inputs = trellis.make(trellis.Pipe)
+    _index = trellis.make(dict)     # {(pos,value):{rule:1}}}
+
+    _queries.connector()
+    def _add_rule(self, rule):
+        key = None
+        for pv in enumerate(rule):
+            if pv[1] is not None:
+                key = pv
+        if key is not None:
+            ind = self._index.setdefault(key, {})
+            ind[rule] = 1
+            trellis.on_undo(ind.pop, rule, 1)
+
+    _queries.disconnector()
+    def _del_rule(self, rule):
+        index = self._index
+        for pv in enumerate(rule):
+            if pv in index:
+                index[pv].pop(rule, 1)
+                trellis.on_undo(index[pv].__setitem__, rule, 1)
+                
+
+
+
+
+
+
+
+    trellis.maintain()
+    def _notify(self):
+        """Send received rows to observers"""
+
+        inputs = self._inputs
+        if not inputs:
+            return      # nothing to see, move along...
+
+        index = self._index
+        matches = {}
+
+        for row in inputs:
+            for pv in enumerate(row):
+                if pv not in index:
+                    continue
+                for rule in index[pv]:
+                    if len(rule)==len(row):
+                        for v1,v2 in zip(rule, row):
+                            if v1!=v2 and v1 is not None:
+                                break
+                        else:
+                            matches.setdefault(rule,[]).append(row)
+        if matches:
+            queries = self._queries
+            for rule in matches:
+                queries[rule].receive(matches[rule])
+
+
 
 
 

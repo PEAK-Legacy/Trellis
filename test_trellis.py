@@ -1133,16 +1133,16 @@ class TestDefaultEventLoop(unittest.TestCase):
                     raise DummyError
         self.assertRaises(DummyError, checktime.get_value)
         self.assertEqual(t._schedule, [t20._when, Max])
+        self.assertEqual(dict(t._events), {t20._when:log[0]})
+        del checktime
+        self.failUnless(isinstance(log.pop(), trellis.Sensor))
         self.assertEqual(dict(t._events), {})
-        self.failUnless(isinstance(log.pop(), trellis.Value))
         self.assertEqual(log, [])
 
     def force_rollback(self):
         d(trellis.Performer)
         def do_it():
             raise DummyError
-
-
 
 
 
@@ -1397,7 +1397,7 @@ def additional_tests():
     files = [
         'README.txt', 'STM-Observer.txt', 'Activity.txt', 'Collections.txt',
         'Internals.txt',
-    ][(sys.version<'2.4')*4:]   # All but Internals use decorator syntax
+    ][(sys.version<'2.4')*3:]   # All but Internals+Collections use decorator syntax
     try:
         from sqlalchemy.orm.attributes import ClassManager
     except ImportError:

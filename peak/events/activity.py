@@ -2,7 +2,7 @@ from peak import context
 from peak.events import trellis, stm
 from peak.util import addons, decorators, symbols
 from peak.util.extremes import Min, Max
-import heapq, weakref, time, sys
+import heapq, time, sys
 
 __all__ = [
     'Time', 'EPOCH', 'NOT_YET', 'EventLoop', 'WXEventLoop', 'TwistedEventLoop',
@@ -332,7 +332,17 @@ class Time(trellis.Component, context.Service):
     _now = EPOCH._when
     auto_update = trellis.attr(True)
     _schedule = trellis.make(lambda self: [Max], writable=True)
-    _events = trellis.make(weakref.WeakValueDictionary)
+    _events = trellis.cellcache(lambda self, key: False)
+
+    _events.connector()
+    def _add_event(self, when):
+        # this heappush doesn't need an undo, since _updated() ignores extras
+        heapq.heappush(self._schedule, when)
+        trellis.changed(trellis.Cells(self)['_schedule'])
+
+    _events.disconnector()
+    def _del_event(self, when):
+        pass
 
     trellis.maintain()
     def _updated(self):
@@ -341,29 +351,19 @@ class Time(trellis.Component, context.Service):
             key = heapq.heappop(schedule)
             trellis.on_undo(heapq.heappush, schedule, key)
             if key in self._events:
-                self._events[key].value = True
+                self._events[key].receive(True)
     
     def reached(self, timer):
         when = timer._when
         return self._now >= when or (
             trellis.ctrl.current_listener is not None
-            and self._event_for(when).value
+            and self._events[when].value
         )
-
-    decorators.decorate(trellis.modifier)
-    def _event_for(self, when):
-        e = self._events.get(when)
-        if e is None:
-            # heappush doesn't need undo, since _update ignores extras
-            heapq.heappush(self._schedule, when)
-            self._events[when] = e = trellis.Value(False)
-            trellis.on_undo(self._events.pop, when, None)
-            trellis.on_commit(trellis.changed, trellis.Cells(self)['_schedule'])
-        return e
 
     def __getitem__(self, interval):
         """Return a timer that's the given offset from the current time"""
         return _Timer(self._now + interval)
+
 
 
 

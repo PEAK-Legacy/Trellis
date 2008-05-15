@@ -1604,4 +1604,39 @@ Pipe
 
 
 
+Cell Caches
+-----------
+
+    >>> class Demo(trellis.Component):
+    ...     cc = trellis.cellcache(lambda self, key: key)
+    ...     cc.connector()
+    ...     def cc_conn(self, key):
+    ...         print "connecting", key
+    ...     cc.disconnector()
+    ...     def cc_disc(self, key):
+    ...         print "disconnecting", key
+
+    >>> d = Demo()
+    >>> c1 = d.cc[1]
+    >>> c2 = d.cc[2]
+    >>> c1.value
+    1
+    >>> c2.value
+    2
+
+    >>> c = Cell(lambda: c1.value)
+    >>> c.value
+    connecting 1
+    1
+
+    >>> c = Cell(lambda: c2.value)
+    disconnecting 1
+
+    >>> c.value
+    connecting 2
+    2
+
+    >>> del c
+    disconnecting 2
+
 

@@ -1,7 +1,7 @@
 from thread import get_ident
 from weakref import ref
 from peak.util import addons, decorators
-import sys, UserDict, UserList, sets, stm, types
+import sys, UserDict, UserList, sets, stm, types, new, weakref
 from peak.util.extremes import Max
 from peak.util.symbols import Symbol, NOT_GIVEN
 
@@ -359,12 +359,12 @@ class SensorBase(ReadOnlyCell):
         if not ctrl.active:
             return atomically(self.receive, value)
         lock(self)
-        if self._set_by is not _sentinel:
-            raise RuntimeError("Cell already set or calculated")
         self._set_value(value)
         change_attr(self, '_set_by', self)
 
     def _check_const(self): pass    # we can never become Constant
+
+
 
 
     def update_connection():
@@ -1269,6 +1269,47 @@ class Pipe(Component):
 
 
 
+class WeakDefaultDict(weakref.WeakValueDictionary):
+
+    def __init__(self, missing):
+        weakref.WeakValueDictionary.__init__(self)
+        self.__missing__ = missing
+
+    def __getitem__(self, key):
+        try:
+            return weakref.WeakValueDictionary.__getitem__(self, key)
+        except KeyError:
+            value = self.__missing__(key)
+            self[key] = value
+            return value
+
+class CacheAttr(CellAttribute):
+    optional = True
+    def can_connect(self): return True
+    def factory(self, rule, value, discrete):
+        #if (isinstance(rule, Connector)
+        #    and not isinstance(self.rule, AbstractConnector)
+        #):
+        conn, disc, rule = rule.connect, rule.disconnect, rule.read
+        #else:
+        #    conn = disc = None
+        def make_cell(key):
+            #if not isinstance(rule, AbstractConnector):
+            r = new.instancemethod(rule, key, type(key))
+            #if conn is None:
+            #    return LazyCell(r, value, discrete)
+            return Sensor(
+                Connector(lambda s: conn(key), lambda s,m: disc(key), r),
+                value, discrete
+            )
+        return Constant(WeakDefaultDict(make_cell))
+
+def cellcache(rule=None, make=None, initially=NO_VALUE, resetting_to=NO_VALUE):
+    return _build_descriptor(
+        rule=rule, initially=initially, resetting_to=resetting_to, make=make,
+        __proptype = CacheAttr.mkattr
+    )
+    
 class Dict(UserDict.IterableUserDict, Component):
     """Dictionary-like object that recalculates observers when it's changed
 
