@@ -660,18 +660,18 @@ class TestController(unittest.TestCase):
         log = []; c2.value; log = []; c1.value = True
         self.failUnless(len(log)==2 and log[1]>log[0], log)
 
-
-
-
-
-
-
-
-
-
-
-
-
+    def testUndoPostCommitCancelsUndoOfCommitSchedule(self):
+        c1 = trellis.Value(False, discrete=True)
+        def c2():
+            c1.value
+            log.append(trellis.savepoint())
+            if len(log)==2:
+                raise DummyError
+        c2 = trellis.Cell(c2)
+        log = []; c2.value; log = [];
+        # This will raise a different error if undoing the on-commit stack
+        # causes an underflow:
+        self.assertRaises(DummyError, setattr, c1, 'value', True)
 
 
 

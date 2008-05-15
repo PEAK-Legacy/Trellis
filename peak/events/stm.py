@@ -263,15 +263,15 @@ class STMHistory(object):
     def on_commit(self, func, *args):
         """Call `func(*args)` if atomic operation is committed"""
         assert self.active, "Not in an atomic operation"
+        s = slice(len(self.at_commit), None)
+        self.undo.append((self.at_commit.__delitem__, (s,)))
         self.at_commit.append((func, args))
-        self.undo.append((self.at_commit.pop,()))
 
     def checkpoint(self):
         """Invoke actions registered w/``on_commit()``, and clear the queue"""
         for (f,a) in self.at_commit:
             f(*a)
         del self.at_commit[:]
-
 
 
 
