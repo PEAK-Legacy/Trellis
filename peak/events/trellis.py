@@ -6,9 +6,8 @@ from peak.util.extremes import Max
 from peak.util.symbols import Symbol, NOT_GIVEN
 
 __all__ = [
-    'Cell', 'Constant', 'rule', 'rules', 'value', 'values', 'optional',
-    'todo', 'todos', 'modifier', 'receiver', 'receivers', 'Component',
-    'discrete', 'repeat', 'poll', 'InputConflict', 'observer', 'ObserverCell',
+    'Cell', 'Constant', 'make', 'todo', 'todos', 'modifier',
+    'Component', 'repeat', 'poll', 'InputConflict',
     'Dict', 'List', 'Set', 'mark_dirty', 'ctrl', 'ConstantMixin', 'Sensor',
     'AbstractConnector', 'Connector',  'Effector', 'init_attrs',
     'attr', 'attrs', 'compute', 'maintain', 'perform', 'Performer', 'Pipe',
@@ -38,6 +37,7 @@ def named_lambda(func, name):
         try: func.__name__ = name
         except TypeError: pass  # Python 2.3 doesn't let you set __name__
     return func
+
 
 try:
     set = set
@@ -278,11 +278,11 @@ class Performer(stm.AbstractListener, AbstractCell):
 
 Performer.rule = Performer.run    # alias the attribute for inspection
 
-class ObserverCell(Performer):
-    __slots__ = ()
-    def __init__(self, rule):
-        warndep("use 'Performer' in place of 'ObserverCell'")        
-        Performer.__init__(self, rule)
+
+
+
+
+
 
 
 def modifier(func):
@@ -582,105 +582,23 @@ class _Defaulting(addons.Registry):
             self.setdefault(k, v)
         return super(_Defaulting, self).created_for(cls)
 
-class CellFactories(_Defaulting):     """Registry for cell factories"""
-class CellValues(addons.Registry):    """Registry for cell values"""
-class CellRules(addons.Registry):     """Registry for cell rules"""
-class IsDiscrete(_Defaulting): "Registry for flagging that a cell is an event"
+class CellFactories(_Defaulting):
+    """Registry for cell factories"""
+
 class IsOptional(_Defaulting):
     """Registry for flagging that an attribute need not be activated"""
-
-def default_factory(typ, ob, name, celltype=Cell):
-    """Default factory for making cells"""
-    rule = CellRules(typ).get(name)
-    value = CellValues(typ).get(name, _sentinel)
-    if rule is not None and hasattr(rule,'__get__'):
-        rule = rule.__get__(ob, typ)
-    if value is _sentinel:
-        if IsDiscrete(typ).get(name, False):
-            return celltype(rule, discrete=True)
-        return celltype(rule)
-    return celltype(rule, value, IsDiscrete(typ).get(name, False))
 
 class Cells(addons.AddOn):
     __slots__ = ()
     addon_key = classmethod(lambda cls: '__cells__')
     def __new__(cls, subject): return {}
 
-def rule(func):
-    """Define a rule cell attribute"""
-    warndep("use 'compute' or 'maintain' in place of 'rule'")
-    return _rule(func, __frame=sys._getframe(1))
 
 
 
-def _rule(func, deco='@rule', factory=default_factory, extras=(), **kw):
-    if isinstance(func, CellProperty):
-        raise TypeError(deco+" decorator must wrap a function directly")
-    else:
-        items = [(CellRules, func), (CellFactories, factory)] + list(extras)
-        return _invoke_callback(items, func, **kw)
 
-def value(value):
-    """Define a value cell attribute"""
-    warndep("use 'attr' in place of 'value'")
-    return _value(value, __frame=sys._getframe(1))
 
-def _value(value, **kw):
-    items = [(CellFactories, default_factory)]
-    return _invoke_callback(items, value=value, **kw)
 
-def _set_multi(frame, kw, wrap, arg='func'):
-    for k, v in kw.items():
-        v = wrap(__name=k, __frame=frame, **{arg:v})
-        frame.f_locals.setdefault(k, v)
-
-def rules(**attrs):
-    """Define multiple rule-cell attributes"""
-    warndep("use 'compute.attrs' in place of 'rules'")
-    _set_multi(sys._getframe(1), attrs, _rule)
-
-def values(**attrs):
-    """Define multiple value-cell attributes"""
-    warndep("use 'attrs' in place of 'values'")
-    _set_multi(sys._getframe(1), attrs, _value, 'value')
-
-def receivers(**attrs):
-    """Define multiple receiver-cell attributes"""
-    warndep("use 'attrs.resetting_to' in place of 'receivers'")
-    _set_multi(sys._getframe(1), attrs, _discrete, 'value')
-
-def optional(func):
-    """Define a rule-cell attribute that's not automatically activated"""
-    warndep("use 'compute' or the 'optional' keyword to maintain/perform")
-    return _invoke_callback([(IsOptional, True)], func)
-
-def receiver(value):
-    """Define a receiver-cell attribute"""
-    warndep("replace 'receiver(X)' with 'attr(resetting_to=X)'")
-    return _discrete(None, value, __frame=sys._getframe(1))
-
-def _discrete(func=_sentinel, value=_sentinel, **kw):
-    items = [(IsDiscrete, True), (CellFactories, default_factory)]
-    return _invoke_callback(items, func, value, **kw)
-
-def discrete(func):
-    """Define a discrete rule attribute"""
-    warndep("replace discrete with (compute/maintain)(resetting_to=)")
-    return _discrete(func, __frame=sys._getframe(1))
-
-def observer(func):
-    """Define an observer cell attribute"""
-    warndep("replace trellis.observer with trellis.perform")
-    return _rule(func, '@observer', observer_factory, [(CellValues, NO_VALUE)],
-        __frame=sys._getframe(1)
-    )
-
-def warndep(msg):
-    from warnings import warn
-    level = 2
-    while sys._getframe(level).f_globals.get('__name__')=='peak.util.decorators':
-        level += 1
-    warn("Please "+msg, DeprecationWarning, level+1)
 
 
 
@@ -730,7 +648,7 @@ class Component(decorators.classy):
                 if descr.__name__ is None: descr.__name__ = k
                 optional[k] = descr.optional
                 factories[k] = descr.make_cell
-            elif k in optional and not isinstance(descr, CellProperty):
+            elif k in optional:
                 # Don't create a cell for overridden non-CellProperty attribute
                 optional[k] = True
 
@@ -757,145 +675,22 @@ def mark_dirty():
     changed(ctrl.current_listener)
 
 
-def observer_factory(typ, ob, name):
-    return default_factory(typ, ob, name, Performer)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class CellProperty(object):
-    """Descriptor for cell-based attributes"""
-    __slots__ = '__name__'
-
-    def __init__(self, name): self.__name__ = name
-
-    def __repr__(self):
-        return "%s(%r)" % (self.__class__.__name__, self.__name__)
-
-    def __get__(self, ob, typ=None):
-        if ob is None:
-            return self
-        try: cells = ob.__cells__
-        except AttributeError: cells = Cells(ob)
-        try:
-            cell = cells[self.__name__]
-        except KeyError:
-            name = self.__name__
-            cell = cells.setdefault(name, self.make_cell(typ, ob, name))
-        return cell.value
-
-    def __set__(self, ob, value):
-        try: cells = ob.__cells__
-        except AttributeError: cells = Cells(ob)
-        if isinstance(value, AbstractCell):
-            name = self.__name__
-            if name in cells and isinstance(cells[name], ConstantMixin):
-                raise AttributeError("Can't change a constant")
-            cells[name] = value
-        else:
-            try:
-                cell = cells[self.__name__]
-            except KeyError:
-                name = self.__name__
-                typ = type(ob)
-                cell = self.make_cell(typ, ob, name)
-                if not hasattr(cell, 'set_value'):
-                    return cells.setdefault(name, Constant(value))
-                cell = cells.setdefault(name, cell)
-            cell.value = value
-
-    def __eq__(self, other):
-        return type(other) is type(self) and other.__name__==self.__name__
-
-    def __ne__(self, other):
-        return type(other) is not type(self) or other.__name__!=self.__name__
-
-    def make_cell(self, typ, ob, name):
-        return CellFactories(typ)[name](typ, ob, name)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def _invoke_callback(
-    extras, func=_sentinel, value=_sentinel, __frame=None, __name=None,
-    __proptype = CellProperty
-):
-    frame = __frame or sys._getframe(2)
-    name  = __name
-    items = list(extras)
-
-    if func is not _sentinel:
-        if not isinstance(func, CellProperty):
-            items.append((CellRules, func))
-        if func is not None and getattr(func,'__name__','<lambda>')!='<lambda>':
-            name = name or func.__name__
-
-    if value is not _sentinel:
-        items.append((CellValues, value))
-
-    def callback(frame, name, func, locals):
-        named_lambda(func, name)
-        for role, value in items:
-            role.for_frame(frame).set(name, value)
-        IsDiscrete.for_frame(frame).defaults[name] = False
-        IsOptional.for_frame(frame).defaults[name] = False
-        CellFactories.for_frame(frame).defaults[name] = default_factory
-        return __proptype(name)
-
-    if name:
-        return callback(frame, name, func, None)
-    else:
-        decorators.decorate_assignment(callback, frame=frame)
-        return _sentinel
-
 def bind(rule, ob, typ=None):
     if hasattr(rule, '__get__'):
         return rule.__get__(ob, typ)
     return rule
     
+
+
+
+
+
+
+
+
+
+
+
 
 
 

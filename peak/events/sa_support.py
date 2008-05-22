@@ -1,6 +1,5 @@
 from sqlalchemy.orm.attributes import get_attribute,set_attribute,ClassManager
-from trellis import Cells, Effector, NO_VALUE, CellValues, CellFactories
-from trellis import Performer
+from trellis import Cells, NO_VALUE, CellFactories, Cell, Performer
 from new import instancemethod
 
 class SAInstrument(ClassManager):
@@ -18,7 +17,6 @@ class SAInstrument(ClassManager):
         cells = Cells(instance)
         if not cells:
             cls = instance.__class__
-            get_value = CellValues(cls).get
             factories = CellFactories(cls)
             getter = instancemethod(get_attribute, instance)
             attrs = []
@@ -26,8 +24,9 @@ class SAInstrument(ClassManager):
                 if attr not in factories:
                     continue
                 attrs.append(attr)
-                cells[attr] = Effector(
-                    instancemethod(getter, attr), get_value(attr, NO_VALUE),
+                cells[attr] = Cell(
+                    instancemethod(getter, attr),
+                    factories[attr].im_self.initial_value(instance) # XXX
                 )
             def setter():
                 for attr in attrs:

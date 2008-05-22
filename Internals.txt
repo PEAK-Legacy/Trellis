@@ -1,43 +1,21 @@
-Turn off deprecation warnings for this test... for now::
-
->>> from warnings import filterwarnings
->>> filterwarnings('ignore', '', DeprecationWarning, __name__)
->>> __name__ = __name__
-
-
-Cell Properties
+Cell Attributes
 ---------------
 
-Cell properties are descriptors used to implement cell-based attributes.  They
+Cell attributes are descriptors used to implement cell-based attributes.  They
 are created using a name::
 
     >>> from peak.events import trellis, activity
-    >>> from peak.events.trellis import Cell, CellProperty
+    >>> from peak.events.trellis import Cell, CellAttribute
 
-    >>> CellProperty('C')
-    CellProperty('C')
-
-And they compare equal only to other cell properties with the same name::
-
-    >>> CellProperty('C') == CellProperty('C')
-    True
-    >>> CellProperty('C') != CellProperty('F')
-    True
-    >>> CellProperty('C') != 'C'
-    True
-    >>> CellProperty('C') == CellProperty('F')
-    False
-    >>> CellProperty('C') != CellProperty('C')
-    False
-    >>> CellProperty('C') == 'C'
-    False
+    >>> CellAttribute(__name__='C')
+    CellAttribute('C')
 
 When used as descriptors in a class, they read or write the ``.value``
 attribute of the corresponding cell in the object's ``__cells__`` dictionary::
 
     >>> class Converter(object):
-    ...     C = CellProperty('C')
-    ...     F = CellProperty('F')
+    ...     C = CellAttribute(__name__='C')
+    ...     F = CellAttribute(__name__='F')
     ...     def __init__(self):
     ...         self.__cells__ = dict(
     ...             F = Cell(lambda: self.C * 1.8 + 32, 32),
@@ -45,7 +23,7 @@ attribute of the corresponding cell in the object's ``__cells__`` dictionary::
     ...         )
 
     >>> Converter.C
-    CellProperty('C')
+    CellAttribute('C')
 
     >>> tc = Converter()
     >>> tc.C
@@ -57,7 +35,7 @@ attribute of the corresponding cell in the object's ``__cells__`` dictionary::
     >>> tc.F
     212.0
 
-Setting a CellProperty-mediated attribute to a ``Cell`` instance, replaces
+Setting a CellAttribute-mediated attribute to a ``Cell`` instance, replaces
 that instance in the ``__cells__`` dictionary::
 
     >>> tc.F = Cell(lambda: -tc.C)
@@ -65,14 +43,13 @@ that instance in the ``__cells__`` dictionary::
     -100
 
 Getting or setting a cell attribute that has no cell in the object's
-``__cells__`` invokes the registered factory function for cell creation::
+``__cells__`` invokes its ``make_cell()`` method to create a cell::
 
-    >>> from peak.events.trellis import CellFactories
     >>> def demo_factory(typ, ob, name):
     ...     print "Creating", name, "cell for", typ, "instance"
     ...     return Cell(lambda: ob.C*2, 0)
 
-    >>> CellFactories(Converter)['F'] = demo_factory
+    >>> Converter.F.make_cell = demo_factory
     >>> del tc.__cells__['F']
     >>> tc.F
     Creating F cell for <class 'Converter'> instance
@@ -89,7 +66,7 @@ Getting or setting a cell attribute that has no cell in the object's
     >>> tc.F
     -100
 
-Cell factories are inherited by subclasses::
+And cell attributes are of course inherited by subclasses::
 
     >>> class Converter2(Converter):
     ...     pass
@@ -104,7 +81,7 @@ Cell factories are inherited by subclasses::
 TodoProperty
 ------------
 
-TodoProperty objects are like CellProperty, but offer an extra ``future``
+TodoProperty objects are like CellAttribute, but offer an extra ``future``
 attribute::
 
     >>> from peak.events.trellis import TodoProperty
@@ -127,34 +104,36 @@ attribute::
 Class Metadata
 --------------
 
-    >>> from peak.events.trellis import CellRules, CellValues, IsDiscrete
-    >>> from peak.events.trellis import IsOptional, default_factory, NO_VALUE
+    >>> from peak.events.trellis import IsOptional, NO_VALUE, CellFactories
     >>> from peak.events.trellis import *
 
-Setting a value in CellRules or CellValues sets the same value in CellFactories
-to default_factory::
+    >>> class Test(trellis.Component):
+    ...     x = compute(lambda self: 27)
+    ...     attrs(y = 42)
 
-    >>> class Test(object):
-    ...     x = rule(lambda self: 27)
-    ...     values(y = 42)
+    >>> Test.x.rule
+    <function ... at ...>
 
-    >>> CellRules(Test)
-    {'x': <function <lambda> at ...>}
+    >>> print Test.y.rule
+    None
 
-    >>> CellValues(Test)
-    {'y': 42}
+    >>> Test.y.value
+    42
+
+    >>> Test.x.value
+    NO_VALUE
 
     >>> CellFactories(Test)
-    {'y': <function default_factory at ...>,
-     'x': <function default_factory at ...>}
+    {'y': <bound method CellAttribute.make_cell of CellAttribute('y')>,
+     'x': <bound method CellAttribute.make_cell of CellAttribute('x')>}
 
     >>> Test.x
-    CellProperty('x')
+    CellAttribute('x')
 
     >>> Test.y
-    CellProperty('y')
+    CellAttribute('y')
 
-    >>> default_factory(Test, Test(), 'y')
+    >>> Test.y.make_cell(Test, Test(), 'y')
     Value(42)
 
     >>> t = Test()
@@ -167,44 +146,44 @@ to default_factory::
     Constant(27)
 
 
-IsOptional and IsDiscrete default to false for any attribute that has an
-explicit setting defined in a given class in any other registry besides
-themselves::
+IsOptional defaults to false for any attribute that has an explicit setting
+defined in a given class in any other registry besides themselves::
 
     >>> IsOptional(Test)
-    {'y': False, 'x': False}
+    {'y': False, 'x': True}
 
-    >>> IsDiscrete(Test)
-    {'y': False, 'x': False}
+    >>> Test.x.discrete
+    False
 
-The default_factory handles _sentinel values by not passing them to the Cell
+    >>> Test.y.discrete
+    False
+
+The default factory handles sentinel values by not passing them to the Cell
 constructor::
 
-    >>> CellRules(Test)['x'] = None
-    >>> CellValues(Test)['x'] = NO_VALUE
-    >>> default_factory(Test, Test(), 'x')
+    >>> Test.x.rule = None
+    >>> Test.x.value = NO_VALUE
+    >>> Test.x.factory = Cell
+    >>> Test.x.make_cell(Test, Test(), 'x')
     Value(None)
 
 And it binds non-None rules to the instance::
 
-    >>> CellRules(Test)['x'] = lambda self: 42
-    >>> default_factory(Test, Test(), 'x')
-    ReadOnlyCell(<bound method Test.<lambda> of <Test object at...>>, None [uninitialized])
+    >>> Test.x.rule = lambda self: 42
+    >>> Test.x.initial_value(Test())
+    >>> Test.x.make_cell(Test, Test(), 'x')
+    Cell(<bound method Test.<lambda> of <Test object at...>>, None [uninitialized])
 
-And uses the event flag from IsDiscrete::
+And uses the ``.discrete`` attribute to determine discreteness::
 
-    >>> CellRules(Test)['x'] = None
-    >>> IsDiscrete(Test)['x'] = True
-    >>> default_factory(Test, Test(), 'x')
+    >>> Test.x.rule = None
+    >>> Test.x.discrete = True
+    >>> Test.x.make_cell(Test, Test(), 'x')
     Value(None, discrete[None])
 
 ``TodoProperty`` only uses the rule to create the default value, and always
 creates a rule-free receiver, regardless of the value or receiver flag
 settings::
-
-    >>> CellRules(Test)['x'] = lambda self: dict()
-    >>> CellValues(Test)['x'] = 54
-    >>> IsDiscrete(Test)['x'] = False
 
     >>> Test.x = TodoProperty(__name__='x', rule=lambda self: dict(), value=54)
     >>> Test.to_x = Test.x.future
@@ -213,6 +192,7 @@ settings::
     TodoValue(<bound method Test.<lambda> of <Test ...>>, {}, discrete[{}])
 
     >>> CellFactories(Test)['x'] = Test.x.make_cell
+
 
 future, @modifier, etc.
 -----------------------
@@ -281,32 +261,43 @@ Decorators
     >>> class Test(trellis.Component):
     ...     def aRule(self):
     ...         return 42
-    ...     r = rule(aRule)   # trick to exercise auto-name-finding
-    ...     anEvent = receiver(-1)
+    ...     r = maintain(aRule)   # trick to exercise auto-name-finding
+    ...     anEvent = attr(resetting_to=-1)
     ...     optRule = compute(lambda:99)
     ...     todo = todo(lambda self:{})
 
     >>> Test.r
-    CellProperty('aRule')
+    CellAttribute('aRule')
 
     >>> Test.todo
     TodoProperty('todo')
 
-    >>> CellRules(Test)
-    {'anEvent': None, 'aRule': <function aRule at...>}
+    >>> print Test.anEvent.rule
+    None
 
-    >>> CellValues(Test)
-    {'anEvent': -1}
+    >>> Test.r.rule
+    <function aRule at...>
 
-    >>> IsDiscrete(Test)
-    {'anEvent': True, 'aRule': False}
+    >>> Test.anEvent.value
+    -1
+
+    >>> Test.r.value
+    NO_VALUE
+
+    >>> Test.anEvent.discrete
+    True
+    
+    >>> Test.r.discrete
+    False
 
     >>> CellFactories(Test)
-    {'anEvent': <function default_factory...>,
-     'aRule': <function default_factory...>}
+    {'anEvent': <bound method CellAttribute.make_cell of CellAttribute('anEvent')>,
+     'optRule': <bound method CellAttribute.make_cell of CellAttribute('optRule')>,
+     'r': <bound method CellAttribute.make_cell of CellAttribute('aRule')>,
+     'todo': <bound method TodoProperty.make_cell of TodoProperty('todo')>}
 
     >>> IsOptional(Test)
-    {'anEvent': False, 'optRule': True, 'aRule': False, 'todo': False}
+    {'anEvent': False, 'optRule': True, 'r': False, 'todo': False}
 
 
     >>> class Test(trellis.Component):
@@ -318,15 +309,6 @@ Decorators
     ...     to_remove = removed.future
     ...     activity.task()
     ...     def task(self): yield None
-
-    >>> CellRules(Test)
-    {}
-
-    >>> CellValues(Test)
-    {}
-
-    >>> IsDiscrete(Test)
-    {}
 
     >>> CellFactories(Test)
     {'removed': <bound method TodoProperty.make_cell of TodoProperty('removed')>,
@@ -359,17 +341,6 @@ Decorators
 
 
 
-Error messages::
-
-    >>> class Test:
-    ...     decorate(rule, trellis.optional)
-    ...     def wrong(): pass
-    Traceback (most recent call last):
-      ...
-    TypeError: @rule decorator must wrap a function directly
-
-
-
 Components
 ----------
 
@@ -377,24 +348,34 @@ Components
     ...     print msg
 
     >>> class Test(Component):
-    ...     rules(
+    ...     trellis.maintain.attrs(
     ...         X = lambda self: self.Y + 2
     ...     )
-    ...     receivers(Y = 0)
-    ...     Z = value(0)
+    ...     trellis.attrs.resetting_to(Y = 0)
+    ...     Z = trellis.attr(0)
     ...     def always(self):
     ...         print "always!"
-    ...     always = rule(always)
+    ...     always = maintain(always)
     ...     def only_on_request(self):
     ...         print "hello!"
     ...     only_on_request = compute(only_on_request)
     ...     A=compute(lambda s:hello("A!"))
-    ...     rules(B=lambda s:hello("B!"))
+    ...     maintain.attrs(B=lambda s:hello("B!"))
 
+    >>> Test.B.discrete
+    False
 
-    >>> IsDiscrete(Test)
-    {'B': False, 'always': False, 
-     'Y': True, 'X': False, 'Z': False}
+    >>> Test.always.discrete
+    False
+
+    >>> Test.X.discrete
+    False
+
+    >>> Test.Y.discrete
+    True
+
+    >>> Test.Z.discrete
+    False
 
 
 Non-optional attributes are activated at creation time, as are the appropriate
@@ -461,7 +442,7 @@ the rule::
 
     >>> x = Cell(value=27)
     >>> class Test(Component):
-    ...     rules(x = lambda self: x.value)
+    ...     trellis.maintain.attrs(x = lambda self: x.value)
     >>> def _rule():
     ...     print "creating"
     ...     Test()
@@ -474,7 +455,7 @@ And initializing a component cell that would ordinarily be read-only, should
 replace it with a constant::
 
     >>> class Test(Component):
-    ...     rules(x = lambda self: {})
+    ...     trellis.make.attrs(x = lambda self: {})
     >>> t = Test(x=())
     >>> t.__cells__['x']
     Constant(())
@@ -489,7 +470,7 @@ A component should not create cells for attributes that are not cell properties
 (e.g., due to override in a subclass)::
 
     >>> class Test(Component):
-    ...     decorate(rule)
+    ...     trellis.maintain()
     ...     def attr(self):
     ...         print "computing"
 
@@ -604,11 +585,11 @@ Discrete Processing
 -------------------
 
     >>> class LineReceiver(trellis.Component):
-    ...     bytes = trellis.receiver('')
-    ...     delimiter = trellis.value('\r\n')
+    ...     bytes = trellis.attr(resetting_to='')
+    ...     delimiter = trellis.attr('\r\n')
     ...     _buffer = ''
     ...
-    ...     decorate(trellis.discrete)
+    ...     trellis.maintain(resetting_to=None)
     ...     def line(self):
     ...         buffer = self._buffer = self._buffer + self.bytes
     ...         lines = buffer.split(self.delimiter, 1)
@@ -617,12 +598,12 @@ Discrete Processing
     ...             trellis.repeat()
     ...             return lines[0]
     ...
-    ...     decorate(trellis.rule)
+    ...     trellis.maintain()
     ...     def dump(self):
     ...         if self.line is not None:
     ...             print "Line:", self.line
 
-    >>> trellis.IsDiscrete(LineReceiver)['line']
+    >>> LineReceiver.line.discrete
     True
 
     >>> lp = LineReceiver()
@@ -1380,7 +1361,7 @@ Effectors
 
 
     >>> class X(trellis.Component):
-    ...     g = trellis.rule(GlobalConnector())
+    ...     g = trellis.maintain(GlobalConnector())
 
     >>> x = X()
     reading
@@ -1391,11 +1372,11 @@ Effectors
     >>> c2 = trellis.Cell(lambda: x.g)
 
     >>> print c2.value
-    connecting Sensor(<bound method GlobalConnector.read of...>, 77)
+    connecting Effector(<bound method GlobalConnector.read of...>, 77)
     77
     
     >>> del c2
-    disconnecting Sensor(<bound method GlobalConnector.read of...>, 77)
+    disconnecting Effector(<bound method GlobalConnector.read of...>, 77)
 
 
 Lazy cells
