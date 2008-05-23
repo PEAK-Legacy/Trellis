@@ -7,9 +7,10 @@ attributes.  This change was made in part for readability reasons, but also
 to support more fine-grained control over the behavior of rules and attributes,
 including new features like "lazy" cells.
 
-In 0.7a1, the older API is still present, but issues deprecation warnings.  In
-0.7a2, the old API will be removed altogether, so please update your code as
-soon as possible to remove these warnings.
+In 0.7a1, the older API was still present, but issued deprecation warnings.  In
+0.7a2, the old API has been removed altogether, so if you have not yet updated
+your code, you will need to install the 0.7a1 version to do your porting before
+you upgrade to 0.7a1 or higher.
 
 The following is a quick guide to the differences between the old and new APIs.
 

@@ -303,8 +303,8 @@ TODO: ``changes`` doesn't update if you initialize ``keys`` with a populated
 set.
 
 
-Hub
----
+Hub (NEW in 0.7a2)
+------------------
 
 A ``collections.Hub`` is used for loosely-coupled many-to-many communications
 with flexible pattern matching -- aka "publish/subscribe" or "pub/sub"

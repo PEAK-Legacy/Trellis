@@ -105,15 +105,29 @@ The Trellis package can can be `downloaded from the Python Package Index`_ or
 installed using `Easy Install`_, and it has a fair amount of documentation,
 including the following manuals:
 
-* `Developer's Guide and Tutorial`_ (Extensively revised for 0.6a1)
+* `Developer's Guide and Tutorial`_
 
-* `Time, Event Loops, and Tasks`_ (NEW for 0.6a1)
+* `Time, Event Loops, and Tasks`_
 
-* `Event-Driven Collections with the Trellis`_ (NEW for 0.6a1)
+* `Event-Driven Collections with the Trellis`_ (New features in 0.7a2)
 
-* `Software Transactional Memory (STM) And Observers`_ (NEW for 0.6a1)
+* `Software Transactional Memory (STM) And Observers`_
 
-* `Porting Code from Older Trellis Versions`_ (NEW for 0.7a1)
+* `Porting Code from Older Trellis Versions`_
+
+
+Release highlights for 0.7a2:
+
+* Removed APIs that were deprecated in 0.7a1
+
+* Rollback now occurs over an entire atomic operation, even if more than one
+  recalc pass occurs within that atomic operation.
+
+* Added ``collections.Hub`` type for publish/subscribe operations similar to
+  PyDispatcher, but in a declarative, callback-free, and extensible manner.
+
+* Various bugfixes
+
 
 Questions, discussion, and bug reports for the Trellis should be directed to
 the `PEAK mailing list`_.
