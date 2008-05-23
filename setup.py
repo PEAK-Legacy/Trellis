@@ -6,7 +6,7 @@ from setuptools import setup
 
 # Metadata
 PACKAGE_NAME = "Trellis"
-PACKAGE_VERSION = "0.7a2"
+PACKAGE_VERSION = "0.7a3"
 PACKAGES = ['peak', 'peak.events']
 def get_description():
     # Get our long description from the documentation
