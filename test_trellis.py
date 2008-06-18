@@ -674,23 +674,23 @@ class TestController(unittest.TestCase):
         self.assertRaises(DummyError, setattr, c1, 'value', True)
 
 
+class TestTime(unittest.TestCase):
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def testIndependentNextEventTime(self):
+        # Ensure that next_event_time() never returns a *past* time
+        t = Time()
+        t.auto_update = False
+        t20 = t[20]
+        t40 = t[40]
+        d(trellis.Cell)
+        def check_reached():
+            t.reached(t20)
+            t.reached(t40)
+            nt = t.next_event_time(True)
+            self.failIf(nt is not None and nt<=0)
+        check_reached.value
+        t.advance(25)
+        t.advance(15)
 
 
 

@@ -336,7 +336,7 @@ class Time(trellis.Component, context.Service):
 
     _events.connector()
     def _add_event(self, when):
-        # this heappush doesn't need an undo, since _updated() ignores extras
+        # this heappush doesn't need an undo, since _next_event() ignores extras
         heapq.heappush(self._schedule, when)
         trellis.changed(trellis.Cells(self)['_schedule'])
 
@@ -345,13 +345,14 @@ class Time(trellis.Component, context.Service):
         pass
 
     trellis.maintain()
-    def _updated(self):
+    def _next_event(self):
         schedule = self._schedule
         while self._tick >= schedule[0]:
             key = heapq.heappop(schedule)
             trellis.on_undo(heapq.heappush, schedule, key)
             if key in self._events:
                 self._events[key].receive(True)
+        return schedule[0]
     
     def reached(self, timer):
         when = timer._when
@@ -363,7 +364,6 @@ class Time(trellis.Component, context.Service):
     def __getitem__(self, interval):
         """Return a timer that's the given offset from the current time"""
         return _Timer(self._now + interval)
-
 
 
 
@@ -395,7 +395,7 @@ class Time(trellis.Component, context.Service):
         otherwise, returns the absolute ``time.time()`` of the event.
         """
         now = self._tick   # ensure recalc whenever time moves forward
-        when = self._schedule[0]
+        when = self._next_event
         if when is Max:
             return None
         if relative:
