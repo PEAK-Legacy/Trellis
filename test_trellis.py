@@ -58,17 +58,22 @@ if wx:
             EventLoop.call(log.append, 2)
             EventLoop.call(log.append, 3)
             EventLoop.call(log.append, 4)
-            EventLoop.call(EventLoop.stop)
+            event = Time[0.00001]
+            def c():
+                if event:
+                    # events aren't
+                    EventLoop.call(EventLoop.stop)
+            c = trellis.Cell(c)
+            c.value
+
+            # This will loop indefinitely, if sub-millisecond events aren't
+            # rounded up to the next millisecond.
             EventLoop.run()
+
             self.assertEqual(log, [1,2,3,4])
 
-            # XXX this should test timing stuff, but the only way to do that
+            # XXX this should test more timing stuff, but the only way to do it
             #     is with a wx mock, which I haven't time for as yet.
-
-
-
-
-
 
 
 

@@ -301,7 +301,9 @@ class WXEventLoop(EventLoop):
         if self.running:
             if Time.auto_update:
                 if self._next_time is not None:
-                    self.wx.FutureCall(self._next_time*1000, Time.tick)
+                    self.wx.CallLater(
+                        self._next_time*1000+(self._next_time<1), Time.tick
+                    )
             if self.stop_requested:
                 self.wx.GetApp().ExitMainLoop()
 
@@ -323,8 +325,6 @@ class WXEventLoop(EventLoop):
     def _setup(self):
         import wx
         self.wx = wx
-
-
 
 class Time(trellis.Component, context.Service):
     """Manage current time and intervals"""
