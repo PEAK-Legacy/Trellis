@@ -205,8 +205,7 @@ class EventLoop(trellis.Component, context.Service):
 
     def _loop(self):
         """Subclasses should invoke their external loop here"""
-        queue = self._call_queue
-        while (queue or self._next_time) and not self.stop_requested:
+        while (self._call_queue or self._next_time) and not self.stop_requested:
             self.flush(1)
 
     def _setup(self):
@@ -220,6 +219,7 @@ class EventLoop(trellis.Component, context.Service):
         """Subclasses should register `func` to be called by external loop
 
         Note: Must be safe to call this from a 'foreign' thread."""
+
 
 
 
@@ -316,7 +316,7 @@ class WXEventLoop(EventLoop):
             if app.ExitOnFrameDelete:   # handle case where windows exist
                 self.stop()
             else:
-                app.ProcessPendingEvents()  # ugh
+                app.ProcessPendingEvents(); Time.tick()  # ugh
 
     def _arrange_callback(self, func):
         """Call `func(*args, **kw)` at the next opportunity"""

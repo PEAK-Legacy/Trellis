@@ -50,7 +50,7 @@ if wx:
             from peak.events.activity import EventLoop, WXEventLoop
             EventLoop <<= WXEventLoop
             self.app = wx.PySimpleApp(redirect=False)
-            self.app.ExitOnFrameDelete = False
+            self.frame = wx.Frame(None)
 
         def testSequentialCalls(self):
             log = []
@@ -69,16 +69,11 @@ if wx:
             # This will loop indefinitely, if sub-millisecond events aren't
             # rounded up to the next millisecond.
             EventLoop.run()
-
+            self.frame.Destroy()
             self.assertEqual(log, [1,2,3,4])
 
             # XXX this should test more timing stuff, but the only way to do it
             #     is with a wx mock, which I haven't time for as yet.
-
-
-
-
-
 
 
 
