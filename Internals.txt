@@ -1489,8 +1489,9 @@ CellAttribute
     (None, None)
 
     >>> conn = lambda self:23
-    >>> t = t.connector(conn)
-    >>> t = t.connector(conn)
+    >>> t.connector(conn) is conn
+    True
+    >>> t.connector(conn)
     Traceback (most recent call last):
       ...
     TypeError: CellAttribute('t') already has a .connector
@@ -1504,8 +1505,9 @@ CellAttribute
     TypeError: CellAttribute('t') is missing a .disconnector
     
     >>> disc = lambda self:99
-    >>> t = t.disconnector(disc)
-    >>> t = t.disconnector(disc)
+    >>> t.disconnector(disc) is disc
+    True
+    >>> t.disconnector(disc)
     Traceback (most recent call last):
       ...
     TypeError: CellAttribute('t') already has a .disconnector
@@ -1523,16 +1525,107 @@ CellAttribute
     TypeError: CellAttribute('t') is missing a .connector
 
     >>> t.rule = AbstractConnector()
-    >>> t = t.connector(conn)
+    >>> t.connect = None    
+    >>> t.connector(conn)
     Traceback (most recent call last):
       ...
     TypeError: The rule for CellAttribute('t')  is itself a Connector
 
     >>> t.disconnect = None    
-    >>> t = t.disconnector(disc)
+    >>> t.disconnector(disc)
     Traceback (most recent call last):
       ...
     TypeError: The rule for CellAttribute('t')  is itself a Connector
+
+
+Connect/disconnect of func w/same name should return the cellattr so as not
+to overwrite it::
+
+    >>> def attr(self): return 42
+    >>> attr = trellis.compute(attr)
+    >>> attr.connector(attr.rule) is attr
+    True
+    >>> attr.disconnector(attr.rule) is attr
+    True
+
+    >>> class Dummy:
+    ...     trellis.compute()
+    ...     def attr(self):
+    ...         return 42
+    ...
+    ...     _attr = attr
+    ...
+    ...     attr.connector()
+    ...     def attr(self,*args):
+    ...         pass
+    ...
+    ...     print attr is _attr
+    ...
+    ...     attr.disconnector()
+    ...     def attr(self,*args):
+    ...         pass
+    ...
+    ...     print attr is _attr
+    True
+    True
+    
+But only if has the same name::
+
+    >>> foo = trellis.compute(attr.rule)
+    >>> foo.connector(foo.rule) is foo.rule
+    True
+    >>> foo.disconnector(foo.rule) is foo.rule
+    True
+
+    >>> class Dummy:
+    ...     trellis.compute()
+    ...     def foo(self):
+    ...         return 99
+    ...
+    ...     foo.connector()
+    ...     def conn(self,*args):
+    ...         pass
+    ...
+    ...     print conn is foo.connect
+    ...
+    ...     foo.disconnector()
+    ...     def disconn(self,*args):
+    ...         pass
+    ...
+    ...     print disconn is foo.disconnect   
+    True
+    True
+
+And only if the local variable of the same name is the attribute object::
+
+    >>> def attr(self): return 42
+    >>> _attr = trellis.compute(attr)
+    >>> _attr.connector(attr) is _attr.connect
+    True
+    >>> _attr.disconnector(attr) is _attr.disconnect
+    True
+
+    >>> class Dummy:
+    ...     trellis.compute()
+    ...     def attr(self):
+    ...         return 42
+    ...
+    ...     _attr = attr; del attr
+    ...
+    ...     _attr.connector()
+    ...     def attr(self,*args):
+    ...         pass
+    ...
+    ...     print attr is _attr.connect
+    ...
+    ...     _attr.disconnector()
+    ...     def attr(self,*args):
+    ...         pass
+    ...
+    ...     print attr is _attr.disconnect
+    True
+    True
+
 
 
 Pipe

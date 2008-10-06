@@ -830,7 +830,11 @@ class CellAttribute(object):
 
         if func is not None:
             setattr(self, methodname, func)
-            return self
+            if getattr(func, '__name__', None)==self.__name__:
+                frame = frame or sys._getframe(2)
+                if frame.f_locals.get(self.__name__) is self:
+                    return self                
+            return func
 
         frame = frame or sys._getframe(2)
         def callback(frame, name, func, locals):
@@ -841,10 +845,6 @@ class CellAttribute(object):
 
         return decorators.decorate_assignment(callback, frame=frame)
         
-
-
-
-
 
 
 
