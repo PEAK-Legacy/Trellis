@@ -484,9 +484,9 @@ class TestController(unittest.TestCase):
         try:
             self.ctrl._retry()
         except stm.CircularityError, e:
-            self.assertEqual(e.args[0],
-                {self.t0: set([self.t1]), self.t1: set([self.t2]),
-                 self.t2: set([self.t0, self.t1])})
+            self.assertEqual(e.args[0], {self.t0: set([self.t1]),
+                self.t1: set([self.t2]), self.t2: set([self.t0, self.t1])})
+            self.assertEqual(e.args[1], (self.t1, self.t2, self.t0))
         else:
             raise AssertionError("Should've caught a cycle")
 
@@ -942,67 +942,45 @@ class TestCells(mocker.MockerTestCase):
 
 
     d(a)
-    def testTodoRollbackFuture(self):
-        sp = self.ctrl.savepoint()
-        tv = trellis.TodoValue(dict)
-        self.assertEqual(tv._savepoint, None)
-        tv.get_future()[1] = 2
-        self.assertEqual(tv._savepoint, sp)
-        sp2 = self.ctrl.savepoint()
-        tv.get_future()[2] = 3
-        self.assertEqual(tv._savepoint, sp)
-        self.ctrl.rollback_to(sp2)
-        self.assertEqual(self.ctrl.savepoint(), sp)
-        self.assertEqual(tv._savepoint, None)
-        
-    d(a)
-    def testTodoRollbackSet(self):
-        sp = self.ctrl.savepoint()
-        tv = trellis.TodoValue(dict)
-        self.assertEqual(tv._savepoint, None)
-        tv.get_future()[1] = 2
-        self.assertEqual(tv._savepoint, sp)
-        sp2 = self.ctrl.savepoint()
-        tv.value = {2:3}
-        self.assertEqual(tv._savepoint, sp)
-        self.ctrl.rollback_to(sp2)
-        self.assertEqual(self.ctrl.savepoint(), sp)
-        self.assertEqual(tv._savepoint, None)
-        
-    d(a)
-    def testFullRollbackList(self):
+    def testPartialRollbackList(self):
+        c1 = trellis.Cell(value=42)
         l = trellis.List()
-        sp = self.ctrl.savepoint()
         l.append(1)
-        self.ctrl.on_undo(lambda:None)
-        sp2 = self.ctrl.savepoint()
+        self.assertEqual(l.future, [1])
+        sp = self.ctrl.savepoint()
+        self.ctrl.change_attr(self.ctrl, 'current_listener', c1)
         l.append(2)
-        self.ctrl.rollback_to(sp2)
-        self.assertEqual(self.ctrl.savepoint(), sp)
-
-
+        self.assertEqual(l.future, [1, 2])
+        self.ctrl.rollback_to(sp)
+        self.assertEqual(l.future, [1])
 
     d(a)
-    def testFullRollbackDict(self):
+    def testPartialRollbackDict(self):
+        c1 = trellis.Cell(lambda:None)
         d = trellis.Dict()
-        sp = self.ctrl.savepoint()
         d[1] = 2
-        self.ctrl.on_undo(lambda:None)
-        sp2 = self.ctrl.savepoint()
+        self.assertEqual(d.added, {1:2})
+        sp = self.ctrl.savepoint()
+        self.ctrl.change_attr(self.ctrl, 'current_listener', c1)
         d[2] = 3
-        self.ctrl.rollback_to(sp2)
-        self.assertEqual(self.ctrl.savepoint(), sp)
+        self.assertEqual(d.added, {1:2, 2:3})
+        self.ctrl.rollback_to(sp)
+        self.assertEqual(d.added, {1:2})
 
     d(a)
-    def testFullRollbackSet(self):
+    def testPartialRollbackSet(self):
+        c1 = trellis.Cell(lambda:None)
         s = trellis.Set()
-        sp = self.ctrl.savepoint()
         s.add(1)
-        self.ctrl.on_undo(lambda:None)
-        sp2 = self.ctrl.savepoint()
+        self.assertEqual(list(s.added), [1])
+        sp = self.ctrl.savepoint()
+        self.ctrl.change_attr(self.ctrl, 'current_listener', c1)
         s.add(2)
-        self.ctrl.rollback_to(sp2)
-        self.assertEqual(self.ctrl.savepoint(), sp)
+        self.assertEqual(list(s.added), [1, 2])
+        self.ctrl.rollback_to(sp)
+        self.assertEqual(list(s.added), [1])
+
+
 
     def run_modifier_and_rule(self, func, rule):
         d(self.ctrl.atomically)
@@ -1023,47 +1001,110 @@ class TestCells(mocker.MockerTestCase):
 
 
 
-    def testDictUndo(self):
-        def do_it():
-            dd[1] = 2
-            self.ctrl.on_undo(lambda:None)
-            do_it.sp2 = self.ctrl.savepoint()
-            dd[4] = 6
-            del dd[5]
-        def rule():
-            if dict(dd)=={4:5, 5:6}: return
-            self.assertEqual(dict(dd), {1:2, 4:6})
-            self.ctrl.rollback_to(do_it.sp2)
-            self.assertEqual(self.ctrl.savepoint(), do_it.sp)
-        dd = trellis.Dict()
-        dd[4] = 5
-        dd[5] = 6
-        self.assertEqual(dict(dd), {4:5, 5:6})
-        self.run_modifier_and_rule(do_it, rule)
-        self.assertEqual(dict(dd), {4:5, 5:6})
 
-    def testSetAndObservingUndo(self):
-        def do_it():
-            s.add(1)
-            self.ctrl.on_undo(lambda:None)
-            do_it.sp2 = self.ctrl.savepoint()
-            s.add(3)
-            s.remove(4)
-        def rule():
-            if set(s)==set([4,5]): return
-            self.assertEqual(set(s), set([1,3,5]))
-            self.ctrl.rollback_to(do_it.sp2)
-            self.assertEqual(self.ctrl.savepoint(), do_it.sp)
-        s = trellis.Set([])
-        o = collections.Observing(keys=s)
-        s.update([4,5])
-        self.assertEqual(set(s), set([4,5]))
-        self.assertEqual(set(o._watching), set([4,5]))
-        self.run_modifier_and_rule(do_it, rule)
-        self.assertEqual(set(s), set([4,5]))
-        self.assertEqual(set(o._watching), set([4,5]))
 
-            
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def testSetShouldOverrideInitialCalculatedValue(self):
+        class C(trellis.Component):
+            trellis.maintain(optional=True)
+            def calc(self):
+                return 0
+            trellis.maintain()
+            def getx(self):
+                self.calc        
+            trellis.maintain()
+            def set(self):
+                # This should not conflict with .calc setting itself to 0
+                self.calc = 1   
+            def __init__(self):
+                self.getx
+                self.set        
+        c = C()
+
+    def testMakeDuringPerform(self):
+        class C1(trellis.Component):
+            x = trellis.attr()        
+            trellis.maintain()
+            def rule(self):
+                self.x = 1
+        
+        class C2(trellis.Component):
+            c1 = trellis.make(C1)        
+            trellis.compute()
+            def calc(self):
+                return self.c1.x
+        C2().calc
+
+    def __testMaintainReassign(self):
+        class C(trellis.Component):
+            x = trellis.attr()
+            trellis.maintain()
+            def rule(self):
+                self.x = 10
+        d(trellis.atomically)
+        def test():
+            C(x = 1)
+
+    def testFalsePositiveDepCycle(self):
+
+        c1 = trellis.Cell(value=1)
+
+        d(trellis.Cell)
+        def c2():
+            return c1.value+1
+
+        d(trellis.Cell)
+        def c3():
+            return c1.value+c2.value
+
+        self.assertEqual(c3.value, 3)
+
+        d(trellis.Cell)
+        def c5():
+            c1.value = 27            
+    
+        d(trellis.atomically)
+        def doit():
+            c5.value
+            for c in c2, c3:
+                trellis.ctrl.has_run.setdefault(c, 1)
+                trellis.on_undo(trellis.ctrl.has_run.pop, c)
+                trellis.ctrl.to_retry.setdefault(c, 1)
+            trellis.on_undo(trellis.ctrl._unrun, c2, [c3])
+            trellis.ctrl._retry()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class TestDefaultEventLoop(unittest.TestCase):
 
     def setUp(self):
@@ -1374,6 +1415,47 @@ class TestTasks(unittest.TestCase):
         
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def testNoTodoRollbackIntoTask(self):
+        class CV(trellis.Component):
+            v = trellis.attr(False)
+            s = trellis.make(trellis.Set)
+        
+            trellis.maintain()
+            def maintain(self):
+                if self.v:
+                    self.s.add(1)
+                else:
+                    self.s.discard(1)
+        
+            trellis.perform()
+            def perform(s):
+                self.assertEqual(s.v, True)
+                
+        d(activity.TaskCell)
+        def task():
+            cv = CV()
+            cv.v = True
+            yield activity.Pause
+        
+        EventLoop.run()
 
 
 

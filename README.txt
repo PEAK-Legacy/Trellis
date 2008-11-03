@@ -1567,7 +1567,9 @@ called with no arguments.
 When the "todo" cell is created, the rule is called to create the resetting
 value, just as with a ``make`` attribute.  Unlike a ``make`` attribute,
 however, its rule will be called again each time a "future" (i.e. modified)
-value is required.
+value is required.  (Note: the value returned by your rule *must* be copyable
+using the ``copy.copy()`` function, or you will get an error whenever your
+component is modified by more than one rule in the same recalculation.)
 
 (By the way, you can define todo cells with either a direct call as shown
 above, a ``@trellis.todo`` decorator on a function, or by using

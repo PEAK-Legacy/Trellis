@@ -288,7 +288,7 @@ class STMHistory(object):
 class Controller(STMHistory):
     """STM History with support for subjects, listeners, and queueing"""
 
-    current_listener = destinations = routes = None
+    current_listener = destinations = routes = newcells = None
     readonly = False
 
     def __init__(self):
@@ -299,9 +299,6 @@ class Controller(STMHistory):
         self.layers = []    # heap of layer numbers
         self.queues = {}    # [layer]    -> dict of listeners to be run
         self.to_retry = {}
-
-        from peak.events.trellis import Value
-        self.pulse = Value(0)
 
     def checkpoint(self):
         self.has_run.clear()
@@ -315,16 +312,20 @@ class Controller(STMHistory):
             self.rollback_to(min([self.has_run[r] for r in self.to_retry]))
             for item in self.to_retry:
                 if item in self.routes:
-                    raise CircularityError(self.routes)
+                    path = check_circularity(item, self.routes)
+                    if path: raise CircularityError(self.routes, path)
             else:
                 map(self.schedule, self.to_retry)
         finally:
             self.to_retry.clear()
             self.destinations = self.routes = None
 
-
-
-
+    def __getattr__(self, name):
+        if name=='pulse':   # lazy init due to circular dependency
+            from peak.events.trellis import Value
+            self.pulse = Value(0)
+            return self.pulse
+        raise AttributeError(name)
 
     def _unrun(self, listener, notified):
         destinations = self.destinations
@@ -507,14 +508,16 @@ class Controller(STMHistory):
     def changed(self, subject):
         self.lock(subject)
         cl = self.current_listener
+        if self.readonly and subject is not cl and (
+            self.newcells is None or subject not in self.newcells
+        ):
+            raise RuntimeError("Can't change objects during @perform or @compute")
         if cl is not None:
             self.writes[subject] = cl
         else:
             for listener in subject.iter_listeners():
                 if listener.dirty():
                     self.schedule(listener)
-        if self.readonly and subject is not cl:
-            raise RuntimeError("Can't change objects during @perform or @compute")
 
     def initialize(self, listener):
         self.run_rule(listener, False)
@@ -527,7 +530,48 @@ class Controller(STMHistory):
             try:     return func(*args)
             finally: self.readonly = False
 
+
+
+    def new_cell(self, cell):
+        if self.newcells is not None:
+            self.newcells[cell] = 1
+
+    def with_new(self, func, *args, **kw):
+        old = self.newcells
+        if old is None:
+            self.newcells = {}
+        try:
+            return func(*args, **kw)
+        finally:
+            self.newcells = old
+
+
+def check_circularity(item, routes, start=None, seen=None):
+    """Detect CircularityError, if applicable"""
+    if seen is None: seen = {}
+    if start is None: start = item
+    for via in routes.get(item, ()):
+        if via is start:
+            return (via,)
+        elif via not in seen:
+            seen[via] = 1
+            path = check_circularity(via, routes, start, seen)
+            if path:
+                return (via,) + path
+    return ()
+
 class LocalController(Controller, threading.local):
     """Thread-local Controller"""
+
+
+
+
+
+
+
+
+
+
+
 
 

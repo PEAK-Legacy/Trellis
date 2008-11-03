@@ -1,7 +1,7 @@
 from thread import get_ident
 from weakref import ref
 from peak.util import addons, decorators
-import sys, UserDict, UserList, sets, stm, types, new, weakref
+import sys, UserDict, UserList, sets, stm, types, new, weakref, copy
 from peak.util.extremes import Max
 from peak.util.symbols import Symbol, NOT_GIVEN
 
@@ -90,6 +90,8 @@ class _ReadValue(stm.AbstractSubject, AbstractCell):
         self._set_by = _sentinel
         stm.AbstractSubject.__init__(self)
         self._reset = (_sentinel, value)[bool(discrete)]
+        if ctrl.newcells is not None:
+            ctrl.new_cell(self)
 
     def get_value(self):
         if ctrl.active:
@@ -119,8 +121,6 @@ class _ReadValue(stm.AbstractSubject, AbstractCell):
 
 
 
-
-
 class Value(_ReadValue):
     """A read-write value with optional discrete mode"""
 
@@ -139,7 +139,7 @@ class Value(_ReadValue):
             return  # no change, no foul...
 
         if value!=self._value:
-            if self._set_by is not ctrl.current_listener:
+            if self._set_by not in (ctrl.current_listener, self):
                 # already set by someone else
                 raise InputConflict(self._value, value) #self._set_by) #, value, ctrl.current_listener) # XXX
             changed(self)
@@ -615,11 +615,12 @@ class Cells(addons.AddOn):
 
 class Component(decorators.classy):
     """Base class for objects with Cell attributes"""
-
     __slots__ = ()
 
     decorators.decorate(classmethod, modifier)
     def __class_call__(cls, *args, **kw):
+        if ctrl.readonly and ctrl.newcells is None:
+            return ctrl.with_new(Component.__class_call__.im_func,cls,*args,**kw)
         optional = IsOptional(cls)  # ensure initialization beforehand
         rv = super(Component, cls).__class_call__(*args, **kw)
         if isinstance(rv, cls):
@@ -651,7 +652,6 @@ class Component(decorators.classy):
             elif k in optional:
                 # Don't create a cell for overridden non-CellProperty attribute
                 optional[k] = True
-
 
 
 def repeat():
@@ -985,43 +985,43 @@ make.attrs = make_attrs
 class TodoValue(Value):
     """Value that logs changes for mutable data structures"""
 
-    __slots__ = 'rule', '_savepoint'
+    __slots__ = 'rule', '_copy', '_last_reader'
 
-    def __new__(cls, rule):
+    def __new__(cls, rule, copy=copy.copy):
         return Value.__new__(cls)
 
-    def __init__(self, rule):
+    def __init__(self, rule, copy=copy.copy):
         self.rule = rule
-        self._savepoint = None
+        self._copy = copy
+        self._last_reader = NOT_GIVEN
         Value.__init__(self, rule(), True)
-
-    def set_value(self, value):
-        if not ctrl.active:
-            atomically(self.set_value, value)
-        lock(self)
-        if self._savepoint is None:
-            change_attr(self, '_savepoint', savepoint())
-        else:
-            on_undo(rollback_to, self._savepoint)
-        super(TodoValue, self).set_value(value)
-
-    value = property(Value.get_value.im_func, set_value)
 
     def get_future(self):
         """Get the 'future' value"""
         if not ctrl.active:
             raise RuntimeError("future can only be accessed from a @modifier")
         lock(self)
-        if self._savepoint is None:
-            self.value = self.rule()
-            changed(self)
-        else:
-            on_undo(rollback_to, self._savepoint)
+        if ctrl.current_listener is not self._last_reader:
+            if self._last_reader is NOT_GIVEN:
+                self.value = value = self.rule()
+                changed(self)
+            else:
+                value = self._copy(self._value)
+                change_attr(self, '_value', value)
+            change_attr(self, '_last_reader', ctrl.current_listener)
         return self._value
 
     def _finish(self):
-        change_attr(self, '_savepoint', None)
+        change_attr(self, '_last_reader', NOT_GIVEN)
         super(TodoValue, self)._finish()
+
+
+
+
+
+
+
+
 
 class Pipe(Component):
     """Allow one or more writers to send data to zero or more readers"""
