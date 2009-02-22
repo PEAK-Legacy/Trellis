@@ -529,7 +529,7 @@ class Cell(ReadOnlyCell, Value):
         super(Cell, self).set_value(value)
         if self._needs_init:
             schedule(self)
-
+        else: cancel(self)
 
     value = property(get_value, set_value)
 
@@ -671,7 +671,7 @@ def poll():
 
 def mark_dirty():
     """Force the current rule's return value to be treated as if it changed"""
-    assert ctrl.current_listener is not None, "dirty() must be called from a rule"
+    assert ctrl.current_listener is not None, "mark_dirty() must be called from a rule"
     changed(ctrl.current_listener)
 
 

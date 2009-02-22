@@ -1,6 +1,6 @@
 """Software Transactional Memory and Observers"""
 
-import weakref, sys, heapq, UserList, UserDict, sets
+import weakref, sys, heapq, UserList, UserDict
 from peak.util.extremes import Max
 from peak.util import decorators
 try:
@@ -287,7 +287,6 @@ class STMHistory(object):
 
 class Controller(STMHistory):
     """STM History with support for subjects, listeners, and queueing"""
-
     current_listener = destinations = routes = newcells = None
     readonly = False
 
@@ -349,7 +348,7 @@ class Controller(STMHistory):
                 old_reads, self.reads = self.reads, {}
                 try:
                     listener.run()
-                    self._process_reads(listener, initialized)
+                    self._process_reads(listener)
                 finally:
                     self.reads = old_reads
             else:
@@ -360,7 +359,7 @@ class Controller(STMHistory):
                 try:
                     listener.run()
                     self._process_writes(listener)
-                    self._process_reads(listener, initialized)
+                    self._process_reads(listener)
                 except:
                     self.reads.clear()
                     self.writes.clear()
@@ -387,7 +386,7 @@ class Controller(STMHistory):
         if notified:
             self.on_undo(self._unrun, listener, notified)
 
-    def _process_reads(self, listener, undo=True):
+    def _process_reads(self, listener):
         #
         # Remove subjects from self.reads and link them to `listener`
         # (Old subjects of the listener are deleted, and self.reads is cleared
@@ -400,13 +399,13 @@ class Controller(STMHistory):
             if link.subject in subjects:
                 del subjects[link.subject]
             else:
-                if undo: self.undo.append((Link, (link.subject, listener)))
+                self.undo.append((Link, (link.subject, listener)))
                 link.unlink()
             link = nxt
 
         while subjects:
             link = Link(subjects.popitem()[0], listener)
-            if undo: self.undo.append((link.unlink, ()))
+            self.undo.append((link.unlink, ()))
 
 
     def schedule(self, listener, source_layer=None):
@@ -562,8 +561,6 @@ def check_circularity(item, routes, start=None, seen=None):
 
 class LocalController(Controller, threading.local):
     """Thread-local Controller"""
-
-
 
 
 

@@ -982,6 +982,22 @@ class TestCells(mocker.MockerTestCase):
 
 
 
+    def testSetAfterSchedule(self):
+        def A():
+            B.value
+            C.value
+        
+        A = trellis.Cell(A, None)
+        
+        d(trellis.Cell)
+        def B():
+            A.value = C.value
+        
+        C = trellis.Value()
+        
+        A.value
+        C.value = 1
+
     def run_modifier_and_rule(self, func, rule):
         d(self.ctrl.atomically)
         def go():
@@ -1007,11 +1023,118 @@ class TestCells(mocker.MockerTestCase):
 
 
 
+    def _testNonterminatingXXX(self):
+
+        class InfiniteLoop(trellis.Component):
+            trellis.attrs(v1=False, v2=False)
+        
+            @trellis.maintain
+            def a(self):
+                #print 'A'
+                if self.v1:
+                    self.v2
+                    return True
+        
+            @trellis.maintain
+            def b(self):
+                #print 'B'
+                if self.v1:
+                    self.a
+                    self.v2 = True
+        
+        comp = InfiniteLoop()
+        comp.v1 = True
 
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def _testFalseCircularityXXX(self):
+
+        class FalseCircularity(trellis.Component):
+            trellis.attrs(v1=False, v2=False)
+        
+            @trellis.maintain
+            def a(self):
+                if self.v1:
+                    self.v2
+                    return True
+        
+            @trellis.maintain
+            def b(self):
+                if self.v1:
+                    self.v2 = True
+                else:
+                    self.a
+        
+        comp = FalseCircularity()
+        comp.v1 = True
+
+        # there's no actual circularity, but the correct order can't be found
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def testSensorRollback(self):
+        connector = trellis.Connector(
+            connect=lambda sensor:None, disconnect=lambda sensor, key: None
+        )
+
+        sensor = trellis.Cell(connector)
+        
+        class SensorInitUndoTest(trellis.Component):
+            trellis.attrs(v1=False)
+        
+            @trellis.maintain
+            def a(self):
+                if self.v1:
+                    return _Comp()
+        
+            @trellis.maintain
+            def b(self):
+                if self.v1:
+                    self.a
+        
+        class _Comp(trellis.Component):
+            @trellis.maintain
+            def c(self):
+                sensor.value
+               
+        comp = SensorInitUndoTest()
+        comp.__cells__['a'].layer =  comp.__cells__['b'].layer + 1
+        comp.v1 = True
+        self.failUnless(sensor.next_listener() is comp.a.__cells__['c'])
+        self.failUnless(sensor.listening is not trellis.NOT_GIVEN)
 
 
 
