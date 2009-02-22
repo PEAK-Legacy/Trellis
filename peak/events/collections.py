@@ -210,16 +210,19 @@ class SortedSet(trellis.Component):
         ]
         changes.sort()
         changes.reverse()
-
         lo = 0
         hi = old_size = len(items)
         regions = []
-        
-
         for k, op, ob in changes:
             ind = (k, ob)
             if lo<hi and items[hi-1][0]>=ind:
                 pos = hi-1    # shortcut
+            if lo<hi and ind>=items[hi-1]:
+                # shortcut
+                if ind==items[hi-1]:
+                    pos = hi-1
+                else:
+                    pos = hi
             else:
                 pos = bisect.bisect_left(items, ind, lo, hi)
 
@@ -240,7 +243,4 @@ class SortedSet(trellis.Component):
         if reverse:
             return [(old_size-e, old_size-s, sz) for (s,e,sz) in regions[::-1]]
         return regions
-
-
-
 

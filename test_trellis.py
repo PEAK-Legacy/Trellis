@@ -1028,14 +1028,14 @@ class TestCells(mocker.MockerTestCase):
         class InfiniteLoop(trellis.Component):
             trellis.attrs(v1=False, v2=False)
         
-            @trellis.maintain
+            trellis.maintain()
             def a(self):
                 #print 'A'
                 if self.v1:
                     self.v2
                     return True
         
-            @trellis.maintain
+            trellis.maintain()
             def b(self):
                 #print 'B'
                 if self.v1:
@@ -1069,13 +1069,13 @@ class TestCells(mocker.MockerTestCase):
         class FalseCircularity(trellis.Component):
             trellis.attrs(v1=False, v2=False)
         
-            @trellis.maintain
+            trellis.maintain()
             def a(self):
                 if self.v1:
                     self.v2
                     return True
         
-            @trellis.maintain
+            trellis.maintain()
             def b(self):
                 if self.v1:
                     self.v2 = True
@@ -1115,18 +1115,18 @@ class TestCells(mocker.MockerTestCase):
         class SensorInitUndoTest(trellis.Component):
             trellis.attrs(v1=False)
         
-            @trellis.maintain
+            trellis.maintain()
             def a(self):
                 if self.v1:
                     return _Comp()
         
-            @trellis.maintain
+            trellis.maintain()
             def b(self):
                 if self.v1:
                     self.a
         
         class _Comp(trellis.Component):
-            @trellis.maintain
+            trellis.maintain()
             def c(self):
                 sensor.value
                
@@ -1587,6 +1587,47 @@ class TestTasks(unittest.TestCase):
 
 
 
+
+
+
+
+
+
+
+
+
+
+class SortedSetTestCase(unittest.TestCase):
+
+    def testUnicodeSort(self):
+        data = trellis.Set([1, 2])
+        sorted_set = collections.SortedSet(
+            data=data, sort_key=unicode, reverse=True
+        )
+
+        self.failUnlessEqual(list(sorted_set), [2, 1])
+        data.add(0)
+        self.failUnlessEqual(list(sorted_set), [2, 1, 0])
+
+    def testStrSort(self):
+        data = trellis.Set([1, 3, 4])
+        sorted_set = collections.SortedSet(data=data, sort_key=str)
+
+        self.failUnlessEqual(list(sorted_set), [1, 3, 4])
+        data.add(2)
+        self.failUnlessEqual(list(sorted_set), [1, 2, 3, 4])
+
+    def testRemoveLast(self):
+        data = trellis.Set([1, 2])
+        sorted_set = collections.SortedSet(data=data)
+        data.remove(2)
+        self.failUnlessEqual(list(sorted_set), [1])
+
+    def testAddToEnd(self):
+        data = trellis.Set([1])
+        sorted_set = collections.SortedSet(data=data)
+        data.add(2)
+        self.failUnlessEqual(list(sorted_set), [1, 2])
 
 
 
