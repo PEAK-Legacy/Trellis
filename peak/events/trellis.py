@@ -293,7 +293,7 @@ def modifier(func):
     caller.
     """
     def wrap(__func, __module):
-        """
+        return """
         if not __module.ctrl.active:
             return __module.atomically(__func, $args)
         elif __module.ctrl.current_listener is None:
