@@ -631,4 +631,4 @@ Creating Custom Cell Types (TBD)
 
 TODO: write up AbstractCell, ConstantMixin, value/get_value/set_value, etc.
 
-
+.. ex: set ft=rst :

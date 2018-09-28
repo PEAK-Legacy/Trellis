@@ -179,3 +179,4 @@ the ``CellRules`` add-on), you will need to use this approach instead, as
 the new API does not register things in the same way, and some or all of the
 registries will disappear altogether in 0.7a2.
 
+.. ex: set ft=rst :

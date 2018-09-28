@@ -854,4 +854,4 @@ event loop API, our ``call()`` would have worked::
 For more examples, check out the source code of the ``TwistedEventLoop`` and
 ``WXEventLoop`` classes in ``peak.events.activity``: they're both quite short.
 
-
+.. ex: set ft=rst :

@@ -77,4 +77,4 @@ Using the Trellis with SQLAlchemy
     >>> manager_of_class(User)
     <SAInstrument of <class 'User'> at ...>
 
-
+.. ex: set ft=rst :

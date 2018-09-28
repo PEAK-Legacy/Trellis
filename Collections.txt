@@ -418,3 +418,4 @@ for *every* message of that type.  Thus, you should place fields with fewer
 possible values more to the left, and fields with a larger number of possible
 values more to the right.
 
+.. ex: set ft=rst :

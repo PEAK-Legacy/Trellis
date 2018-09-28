@@ -129,18 +129,14 @@ Release highlights for 0.7a2:
 * Various bugfixes
 
 
-Questions, discussion, and bug reports for the Trellis should be directed to
-the `PEAK mailing list`_.
-
-.. _downloaded from the Python Package Index: http://pypi.python.org/pypi/Trellis#toc
+.. _downloaded from the Python Package Index: https://pypi.python.org/pypi/Trellis#toc
 .. _Easy Install: http://peak.telecommunity.com/DevCenter/EasyInstall
-.. _PEAK mailing list: http://www.eby-sarna.com/mailman/listinfo/PEAK/
-.. _Developer's Guide and Tutorial: http://peak.telecommunity.com/DevCenter/Trellis#toc
-.. _Time, Event Loops, and Tasks: http://peak.telecommunity.com/DevCenter/TrellisActivity
-.. _Event-Driven Collections with the Trellis: http://peak.telecommunity.com/DevCenter/TrellisCollections
-.. _Software Transactional Memory (STM) And Observers: http://peak.telecommunity.com/DevCenter/TrellisSTM
-.. _Porting Code from Older Trellis Versions: http://peak.telecommunity.com/DevCenter/TrellisPorting
-.. _porting guide: http://peak.telecommunity.com/DevCenter/TrellisPorting
+.. _Developer's Guide and Tutorial: #table-of-contents
+.. _Time, Event Loops, and Tasks: Activity.txt
+.. _Event-Driven Collections with the Trellis: Collections.txt
+.. _Software Transactional Memory (STM) And Observers: STM-Observer.txt
+.. _Porting Code from Older Trellis Versions: Porting.txt
+.. _porting guide: Porting.txt
 
 .. _toc:
 .. contents:: **Table of Contents**
@@ -1245,7 +1241,7 @@ create your own mutable types, as we'll discuss in a later section.  (And, the
 ``peak.events.collections`` module also provides some fancier data structures;
 see the `Collections manual`_ for details.)
 
-.. _Collections manual: http://peak.telecommunity.com/DevCenter/TrellisCollections
+.. _Collections manual: Collections.txt
 
 
 trellis.Dict
@@ -2184,4 +2180,4 @@ TrellisIO
 
   * signal() events
 
-
+.. ex: set ft=rst :
